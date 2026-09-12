@@ -1,0 +1,15 @@
+node_modules/
+.next/
+dist/
+build/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+.env
+.env.local
+*.log
+.DS_Store
+DerivedData/
+*.xcuserstate
+xcuserdata/
