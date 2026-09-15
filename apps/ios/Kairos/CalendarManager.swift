@@ -16,7 +16,10 @@ final class CalendarManager: ObservableObject {
             event.startDate = min(startedAt, endedAt)
             event.endDate = max(endedAt, startedAt.addingTimeInterval(60))
             event.notes = "Focused for \(max(1, focusedSeconds / 60)) minute(s). Original estimate: \(task.estimatedMinutes) minutes.\n\nRecorded by Kairos."
-            event.calendar = try kairosCalendar()
+            guard let calendar = store.defaultCalendarForNewEvents else {
+                throw CalendarError.noWritableCalendar
+            }
+            event.calendar = calendar
             try store.save(event, span: .thisEvent, commit: true)
             lastSavedTitle = event.title
             lastError = nil
@@ -39,18 +42,6 @@ final class CalendarManager: ObservableObject {
         }
     }
 
-    private func kairosCalendar() throws -> EKCalendar {
-        if let existing = store.calendars(for: .event).first(where: { $0.title == "Kairos" }) { return existing }
-        guard let source = store.defaultCalendarForNewEvents?.source ?? store.sources.first(where: { $0.sourceType == .local }) else {
-            throw CalendarError.noWritableCalendar
-        }
-        let calendar = EKCalendar(for: .event, eventStore: store)
-        calendar.title = "Kairos"
-        calendar.source = source
-        calendar.cgColor = CGColor(red: 0.19, green: 0.36, blue: 0.29, alpha: 1)
-        try store.saveCalendar(calendar, commit: true)
-        return calendar
-    }
 }
 
 private enum CalendarError: LocalizedError {

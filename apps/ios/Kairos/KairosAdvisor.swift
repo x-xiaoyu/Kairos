@@ -16,6 +16,7 @@ struct KairosAgentOperation: Equatable {
     var taskTitle: String?
     var value: Int?
     var deadline: Date?
+    var isPrimaryCountdown = false
 }
 
 struct KairosAgentProposal: Identifiable, Equatable {
@@ -27,11 +28,12 @@ struct KairosAgentProposal: Identifiable, Equatable {
     var taskTitle: String?
     var value: Int?
     var deadline: Date?
+    var isPrimaryCountdown = false
     var requiresConfirmation: Bool
     var additionalOperations: [KairosAgentOperation] = []
 
     var operations: [KairosAgentOperation] {
-        [KairosAgentOperation(action: action, taskID: taskID, taskTitle: taskTitle, value: value, deadline: deadline)] + additionalOperations
+        [KairosAgentOperation(action: action, taskID: taskID, taskTitle: taskTitle, value: value, deadline: deadline, isPrimaryCountdown: isPrimaryCountdown)] + additionalOperations
     }
 
     var isMultipleTaskCreation: Bool {
@@ -50,6 +52,7 @@ struct KairosAgentProposal: Identifiable, Equatable {
             taskTitle: combinedTitle,
             value: totalMinutes,
             deadline: deadline,
+            isPrimaryCountdown: isPrimaryCountdown,
             requiresConfirmation: requiresConfirmation
         )
     }
@@ -84,11 +87,17 @@ enum KairosAdvisor {
             consequence = "如果推迟 \(next.task.estimatedMinutes) 分钟，“\(later)”也会顺延。"
         } else if let deadline = next.task.deadline {
             let remaining = max(0, Int(deadline.timeIntervalSince(now) / 60))
-            consequence = "距离截止时间约有 \(remaining) 分钟；继续推迟会减少缓冲时间。"
+            consequence = "距离截止时间约有 \(Self.remainingTimeText(minutes: remaining))；继续推迟会减少缓冲时间。"
         } else {
             consequence = "现在仍有调整空间，但立即开始可以保留稍后的自由时间。"
         }
         return KairosRecommendation(eyebrow: next.risk == .safe ? "KAIROS 建议" : "安全时间正在缩短", headline: "现在开始“\(next.task.title)”", reason: reason, consequence: consequence, urgency: next.risk)
+    }
+
+    private static func remainingTimeText(minutes: Int) -> String {
+        if minutes >= 24 * 60 { return "\(max(1, minutes / (24 * 60))) 天" }
+        if minutes >= 60 { return "\(max(1, minutes / 60)) 小时" }
+        return "\(minutes) 分钟"
     }
 
     static func interpret(_ input: String, tasks: [KairosTask], now: Date = .now, countedTaskStyle: String = "split") -> KairosAgentProposal {

@@ -20,7 +20,6 @@ struct AskKairosView: View {
     private let examples = ["我今天很累", "推迟 30 分钟", "今晚添加刷两道 LeetCode，40 分钟"]
 
     var body: some View {
-        NavigationStack {
             ZStack {
                 KairosTheme.background.ignoresSafeArea()
                 ScrollView {
@@ -53,19 +52,50 @@ struct AskKairosView: View {
                         if let proposal {
                             VStack(alignment: .leading, spacing: 14) {
                                 Label("KAIROS 建议", systemImage: "wand.and.stars").font(.caption.bold()).foregroundStyle(Color.kairosPurple)
-                                Text(proposal.title).font(.title3.bold())
-                                Text(proposal.explanation).foregroundStyle(.secondary)
                                 if proposal.isMultipleTaskCreation {
-                                    VStack(alignment: .leading, spacing: 8) {
-                                        ForEach(Array(proposal.operations.enumerated()), id: \.offset) { _, operation in
-                                            Label(operation.taskTitle ?? "新任务", systemImage: "checklist")
-                                                .font(.subheadline.weight(.medium))
+                                    Text("准备创建 \(proposal.operations.count) 项任务")
+                                        .font(.title3.bold())
+                                    Text("请逐项检查，确认后会加入今天的任务列表。")
+                                        .font(.subheadline)
+                                        .foregroundStyle(.secondary)
+                                    VStack(spacing: 0) {
+                                        ForEach(Array(proposal.operations.enumerated()), id: \.offset) { index, operation in
+                                            HStack(alignment: .top, spacing: 12) {
+                                                Text("\(index + 1)")
+                                                    .font(.caption.bold())
+                                                    .foregroundStyle(.white)
+                                                    .frame(width: 24, height: 24)
+                                                    .background(Color.kairosIndigo, in: Circle())
+                                                VStack(alignment: .leading, spacing: 5) {
+                                                    Text(operation.taskTitle ?? "新任务")
+                                                        .font(.headline)
+                                                        .fixedSize(horizontal: false, vertical: true)
+                                                    HStack(spacing: 12) {
+                                                        Label("\(operation.value ?? 30) 分钟", systemImage: "timer")
+                                                        if let deadline = operation.deadline {
+                                                            Label(deadline.formatted(date: .abbreviated, time: .shortened), systemImage: "calendar")
+                                                        }
+                                                    }
+                                                    .font(.caption)
+                                                    .foregroundStyle(.secondary)
+                                                }
+                                                Spacer(minLength: 0)
+                                            }
+                                            .padding(.vertical, 12)
+                                            if index < proposal.operations.count - 1 { Divider().padding(.leading, 36) }
                                         }
+                                    }
+                                    .padding(.horizontal, 14)
+                                    .background(Color(.secondarySystemBackground).opacity(0.72), in: RoundedRectangle(cornerRadius: 10))
+                                    VStack(alignment: .leading, spacing: 8) {
                                         Picker("创建方式", selection: $combineMultipleTasks) {
                                             Text("拆成 \(proposal.operations.count) 条").tag(false)
                                             Text("合为 1 条").tag(true)
                                         }.pickerStyle(.segmented)
                                     }
+                                } else {
+                                    Text(proposal.title).font(.title3.bold())
+                                    Text(proposal.explanation).foregroundStyle(.secondary)
                                 }
                                 if proposal.requiresConfirmation {
                                     HStack { Button("暂时不要") { self.proposal = nil }.buttonStyle(.bordered); Button("确认执行", action: apply).buttonStyle(.borderedProminent) }
@@ -106,10 +136,11 @@ struct AskKairosView: View {
                     }.padding(12).background(.ultraThinMaterial)
                 }
             }
-            .toolbar { ToolbarItem(placement: .cancellationAction) { Button("关闭") { dismiss() } } }
+            .navigationTitle("Kairos")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar(.visible, for: .navigationBar)
             .sheet(isPresented: $showingPersonalAI) { PersonalAIConnectionView() }
             .animation(.spring(response: 0.35, dampingFraction: 0.8), value: proposal?.id)
-        }
     }
 
     private var activeTasks: [KairosTask] {
@@ -272,6 +303,7 @@ private struct GuidedLocalConversationView: View {
     @State private var minutes: Int
     @State private var hasDeadline = true
     @State private var deadline: Date
+    @State private var isPrimaryCountdown = false
 
     init(flow: GuidedLocalFlow, tasks: [KairosTask], onFlowChange: @escaping (GuidedLocalFlow) -> Void, onPrepared: @escaping (KairosAgentProposal) -> Void, onCancel: @escaping () -> Void) {
         self.flow = flow
@@ -350,6 +382,7 @@ private struct GuidedLocalConversationView: View {
                     Toggle("设置截止时间", isOn: $hasDeadline)
                     if hasDeadline {
                         DatePicker("截止", selection: $deadline, in: Date.now..., displayedComponents: [.date, .hourAndMinute])
+                        Toggle("设为首页主要倒数日", isOn: $isPrimaryCountdown)
                     }
                 }
                 nextButton
@@ -456,6 +489,7 @@ private struct GuidedLocalConversationView: View {
                 taskTitle: cleanTitle,
                 value: minutes,
                 deadline: hasDeadline ? deadline : nil,
+                isPrimaryCountdown: hasDeadline && isPrimaryCountdown,
                 requiresConfirmation: true
             )
         case .postpone(let task):

@@ -12,6 +12,31 @@ struct PlannedTask: Identifiable {
 }
 
 enum Planner {
+    static func scheduledDay(for task: KairosTask, now: Date, calendar: Calendar = .current) -> Date {
+        calendar.startOfDay(for: task.scheduledStart ?? task.deadline ?? now)
+    }
+
+    static func isScheduledOnSameDay(_ lhs: KairosTask, _ rhs: KairosTask, now: Date, calendar: Calendar = .current) -> Bool {
+        scheduledDay(for: lhs, now: now, calendar: calendar) == scheduledDay(for: rhs, now: now, calendar: calendar)
+    }
+
+    static func postponeWithinDay(_ task: KairosTask, among tasks: [KairosTask], minutes _: Int, now: Date = .now, calendar: Calendar = .current) {
+        let day = scheduledDay(for: task, now: now, calendar: calendar)
+        var sameDay = tasks.filter {
+            $0.status != .complete && scheduledDay(for: $0, now: now, calendar: calendar) == day
+        }.sorted {
+            isOrderedBefore($0, $1, now: now, calendar: calendar)
+        }
+        guard let currentIndex = sameDay.firstIndex(where: { $0.id == task.id }),
+              sameDay.indices.contains(currentIndex + 1) else { return }
+
+        sameDay.swapAt(currentIndex, currentIndex + 1)
+        for (index, item) in sameDay.enumerated() {
+            item.dayOrder = index + 1
+        }
+        task.availableAfter = nil
+    }
+
     static func latestSafeStart(for task: KairosTask, among tasks: [KairosTask], adjustment: Double = 1) -> Date? {
         guard let deadline = task.deadline, task.deadlineType != .none else { return nil }
         let competing = tasks.filter { other in
@@ -32,15 +57,19 @@ enum Planner {
     }
 
     static func makePlan(tasks: [KairosTask], now: Date = .now, adjustment: Double = 1) -> [PlannedTask] {
+        let calendar = Calendar.current
         let active = tasks.filter { $0.status != .complete }.sorted {
-            let leftDeadline = $0.deadline ?? .distantFuture
-            let rightDeadline = $1.deadline ?? .distantFuture
-            if leftDeadline != rightDeadline { return leftDeadline < rightDeadline }
-            if $0.priority != $1.priority { return $0.priority > $1.priority }
-            return $0.createdAt < $1.createdAt
+            isOrderedBefore($0, $1, now: now, calendar: calendar)
         }
         var cursor = now
+        var activeDay: Date?
         return active.map { task in
+            let taskDay = scheduledDay(for: task, now: now, calendar: calendar)
+            if taskDay != activeDay {
+                activeDay = taskDay
+                cursor = taskDay == calendar.startOfDay(for: now) ? now : taskDay
+            }
+            if let scheduledStart = task.scheduledStart, scheduledStart > cursor { cursor = scheduledStart }
             if let availableAfter = task.availableAfter, availableAfter > cursor { cursor = availableAfter }
             let minutes = max(5, Int(Double(task.estimatedMinutes) * adjustment))
             let end = Calendar.current.date(byAdding: .minute, value: minutes, to: cursor)!
@@ -49,5 +78,18 @@ enum Planner {
             cursor = Calendar.current.date(byAdding: .minute, value: 5, to: end)!
             return item
         }
+    }
+
+    private static func isOrderedBefore(_ lhs: KairosTask, _ rhs: KairosTask, now: Date, calendar: Calendar) -> Bool {
+        let leftDay = scheduledDay(for: lhs, now: now, calendar: calendar)
+        let rightDay = scheduledDay(for: rhs, now: now, calendar: calendar)
+        if leftDay != rightDay { return leftDay < rightDay }
+        if (lhs.dayOrder == 0) != (rhs.dayOrder == 0) { return lhs.dayOrder == 0 }
+        if lhs.dayOrder != rhs.dayOrder { return lhs.dayOrder < rhs.dayOrder }
+        if lhs.priority != rhs.priority { return lhs.priority > rhs.priority }
+        let leftDeadline = lhs.deadline ?? .distantFuture
+        let rightDeadline = rhs.deadline ?? .distantFuture
+        if leftDeadline != rightDeadline { return leftDeadline < rightDeadline }
+        return lhs.createdAt < rhs.createdAt
     }
 }

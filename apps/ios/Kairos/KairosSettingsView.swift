@@ -1,7 +1,6 @@
 import SwiftUI
 
 struct KairosSettingsView: View {
-    @Environment(\.dismiss) private var dismiss
     @AppStorage("saveFocusToCalendar") private var saveFocusToCalendar = true
     @AppStorage("weatherUnit") private var weatherUnit = "automatic"
     @AppStorage("agentServerURL") private var agentServerURL = "http://127.0.0.1:8000"
@@ -9,7 +8,6 @@ struct KairosSettingsView: View {
     @State private var showingPersonalAI = false
 
     var body: some View {
-        NavigationStack {
             Form {
                 Section("Kairos Agent") {
                     Picker("运行模式", selection: $agentMode) {
@@ -46,14 +44,14 @@ struct KairosSettingsView: View {
                 }
                 Section("Apple Calendar") {
                     Toggle("Save completed focus sessions", isOn: $saveFocusToCalendar)
-                    Text("When enabled, completing a focus session creates an event in a dedicated Kairos calendar using the actual start and finish time.").font(.caption).foregroundStyle(.secondary)
+                    Text("开启后，点击“完成任务”会将实际开始和结束时间写入 iPhone 当前默认日历。首次使用时请允许 Kairos 完全访问日历。")
+                        .font(.caption).foregroundStyle(.secondary)
                 }
                 Section("Notifications") { Text("Kairos schedules on-device alerts at each task’s Latest Safe Start. Notification permission is managed in the iPhone Settings app.").font(.caption).foregroundStyle(.secondary) }
             }
             .navigationTitle("Settings")
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
+            .toolbar(.visible, for: .navigationBar)
             .sheet(isPresented: $showingPersonalAI) { PersonalAIConnectionView() }
-        }
     }
 }

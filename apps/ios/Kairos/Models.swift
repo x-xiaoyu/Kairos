@@ -19,12 +19,17 @@ final class KairosTask {
     var deadlineTypeRaw: String
     var createdAt: Date
     var availableAfter: Date?
+    var scheduledStart: Date? = nil
+    /// Zero follows the normal priority/deadline order. Positive values are used
+    /// only to place a postponed task later among tasks on the same calendar day.
+    var dayOrder: Int = 0
+    var isPrimaryCountdown: Bool = false
 
-    init(title: String, goal: String = "", deadline: Date? = nil, estimatedMinutes: Int = 30, priority: Int = 3, status: TaskStatus = .todo, cognitiveLoad: CognitiveLoad = .medium, isInterruptible: Bool = true, deadlineType: DeadlineType = .soft) {
+    init(title: String, goal: String = "", deadline: Date? = nil, scheduledStart: Date? = nil, estimatedMinutes: Int = 30, priority: Int = 3, status: TaskStatus = .todo, cognitiveLoad: CognitiveLoad = .medium, isInterruptible: Bool = true, deadlineType: DeadlineType = .soft, isPrimaryCountdown: Bool = false) {
         id = UUID(); self.title = title; self.goal = goal; self.deadline = deadline
         self.estimatedMinutes = estimatedMinutes; self.priority = priority; statusRaw = status.rawValue
         cognitiveLoadRaw = cognitiveLoad.rawValue; self.isInterruptible = isInterruptible
-        deadlineTypeRaw = deadlineType.rawValue; createdAt = .now; availableAfter = nil
+        deadlineTypeRaw = deadlineType.rawValue; createdAt = .now; availableAfter = nil; self.scheduledStart = scheduledStart; dayOrder = 0; self.isPrimaryCountdown = isPrimaryCountdown
     }
 
     var status: TaskStatus { get { TaskStatus(rawValue: statusRaw) ?? .todo } set { statusRaw = newValue.rawValue } }

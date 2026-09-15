@@ -1,7 +1,6 @@
 import SwiftUI
 
 struct DayReviewView: View {
-    @Environment(\.dismiss) private var dismiss
     let events: [ActivityEvent]
     let completed: [KairosTask]
     @State private var showingCompleted = false
@@ -9,15 +8,17 @@ struct DayReviewView: View {
     private var today: [ActivityEvent] { events.filter { Calendar.current.isDateInToday($0.timestamp) } }
 
     var body: some View {
-        NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 22) {
                     VStack(alignment: .leading, spacing: 6) { Text("YOUR MOMENTUM").font(.caption2.bold()).tracking(1.5).foregroundStyle(Color.kairosPurple); Text("Review your day").font(.system(size: 36, weight: .bold, design: .serif)); Text("What you did, in the order it happened.").foregroundStyle(.secondary) }
                     HStack { completedStat; stat("\(completed.reduce(0) { $0 + $1.estimatedMinutes })m", "focused"); stat("\(today.filter { $0.action.contains("Focus") }.count)", "focus events") }
                     if showingCompleted { completedList } else { timeline(today, emptyTitle: "No activity yet") }
                 }.padding(20)
-            }.background(KairosTheme.background).navigationTitle("Today").navigationBarTitleDisplayMode(.inline).toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
-        }
+            }
+            .background(KairosTheme.background)
+            .navigationTitle("回顾")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar(.visible, for: .navigationBar)
     }
 
     private func stat(_ value: String, _ label: String) -> some View { VStack(alignment: .leading) { Text(value).font(.title2.bold()).foregroundStyle(Color.kairosPurple); Text(label).font(.caption).foregroundStyle(.secondary) }.frame(maxWidth: .infinity, alignment: .leading).padding(14).background(LinearGradient(colors: [.white, .kairosPurple.opacity(0.09)], startPoint: .topLeading, endPoint: .bottomTrailing), in: RoundedRectangle(cornerRadius: 6)) }

@@ -4,24 +4,34 @@ import SwiftUI
 struct TaskEditor: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.modelContext) private var context
+    @Query(sort: \KairosTask.createdAt) private var allTasks: [KairosTask]
     var task: KairosTask?
     @State private var title = ""
     @State private var goal = ""
     @State private var hasDeadline = true
     @State private var deadline = Date.now.addingTimeInterval(3_600)
+    @State private var hasScheduledStart = false
+    @State private var scheduledStart = Date.now.addingTimeInterval(300)
     @State private var minutes = 30
     @State private var priority = 3
     @State private var load = CognitiveLoad.medium
     @State private var deadlineType = DeadlineType.soft
     @State private var interruptible = true
+    @State private var isPrimaryCountdown = false
 
     var body: some View {
-        NavigationStack {
-            Form {
+        Form {
                 Section("What needs doing?") { TextField("Task title", text: $title); TextField("Goal (optional)", text: $goal) }
                 Section("Time") {
+                    Toggle("设置开始时间", isOn: $hasScheduledStart)
+                    if hasScheduledStart {
+                        DatePicker("开始", selection: $scheduledStart, in: Date.now..., displayedComponents: [.date, .hourAndMinute])
+                        Text("到达开始时间时，Kairos 会提醒你该做这项任务。")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
                     Toggle("Has a deadline", isOn: $hasDeadline)
-                    if hasDeadline { DatePicker("Deadline", selection: $deadline, in: Date.now..., displayedComponents: [.date, .hourAndMinute]); Picker("Deadline type", selection: $deadlineType) { ForEach(DeadlineType.allCases, id: \.self) { Text($0.rawValue.capitalized).tag($0) } } }
+                    if hasDeadline { DatePicker("Deadline", selection: $deadline, in: Date.now..., displayedComponents: [.date, .hourAndMinute]); Toggle("设为首页主要倒数日", isOn: $isPrimaryCountdown); Picker("Deadline type", selection: $deadlineType) { ForEach(DeadlineType.allCases, id: \.self) { Text($0.rawValue.capitalized).tag($0) } } }
                     HStack {
                         Text("Estimated duration")
                         Spacer()
@@ -41,28 +51,36 @@ struct TaskEditor: View {
                     Picker("Cognitive load", selection: $load) { ForEach(CognitiveLoad.allCases, id: \.self) { Text($0.rawValue.capitalized).tag($0) } }
                     Toggle("Can be interrupted", isOn: $interruptible)
                 }
-            }
-            .navigationTitle(task == nil ? "New task" : "Edit task")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
+        }
+        .navigationTitle(task == nil ? "New task" : "Edit task")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            if task == nil {
                 ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
-                ToolbarItem(placement: .confirmationAction) { Button("Save") { save() }.disabled(title.trimmingCharacters(in: .whitespaces).isEmpty || !(5...720).contains(minutes)) }
             }
-            .onAppear {
-                guard let task else { return }
-                title = task.title; goal = task.goal; hasDeadline = task.deadline != nil; deadline = task.deadline ?? deadline
-                minutes = task.estimatedMinutes; priority = task.priority; load = task.cognitiveLoad
-                deadlineType = task.deadlineType; interruptible = task.isInterruptible
-            }
+            ToolbarItem(placement: .confirmationAction) { Button("Save") { save() }.disabled(title.trimmingCharacters(in: .whitespaces).isEmpty || !(5...720).contains(minutes)) }
+        }
+        .onAppear {
+            guard let task else { return }
+            title = task.title; goal = task.goal; hasDeadline = task.deadline != nil; deadline = task.deadline ?? deadline
+            hasScheduledStart = task.scheduledStart != nil; scheduledStart = task.scheduledStart ?? scheduledStart
+            minutes = task.estimatedMinutes; priority = task.priority; load = task.cognitiveLoad
+            deadlineType = task.deadlineType; interruptible = task.isInterruptible
+            isPrimaryCountdown = task.isPrimaryCountdown
         }
     }
 
     private func save() {
+        if hasDeadline && isPrimaryCountdown {
+            for existing in allTasks where existing.id != task?.id { existing.isPrimaryCountdown = false }
+        }
         if let task {
             task.title = title; task.goal = goal; task.deadline = hasDeadline ? deadline : nil; task.estimatedMinutes = minutes
+            task.scheduledStart = hasScheduledStart ? scheduledStart : nil
             task.priority = priority; task.cognitiveLoad = load; task.deadlineType = hasDeadline ? deadlineType : .none; task.isInterruptible = interruptible
+            task.isPrimaryCountdown = hasDeadline && isPrimaryCountdown
         } else {
-            context.insert(KairosTask(title: title, goal: goal, deadline: hasDeadline ? deadline : nil, estimatedMinutes: minutes, priority: priority, cognitiveLoad: load, isInterruptible: interruptible, deadlineType: hasDeadline ? deadlineType : .none))
+            context.insert(KairosTask(title: title, goal: goal, deadline: hasDeadline ? deadline : nil, scheduledStart: hasScheduledStart ? scheduledStart : nil, estimatedMinutes: minutes, priority: priority, cognitiveLoad: load, isInterruptible: interruptible, deadlineType: hasDeadline ? deadlineType : .none, isPrimaryCountdown: hasDeadline && isPrimaryCountdown))
             context.insert(ActivityEvent(action: "Task created", taskTitle: title, detail: "Estimated at \(minutes) minutes."))
         }
         dismiss()
@@ -145,6 +163,9 @@ struct HabitsView: View {
             }
 
             HStack(alignment: .lastTextBaseline) {
+                Image(systemName: routine.streak > 0 ? "flame.fill" : "flame")
+                    .font(.title2)
+                    .foregroundStyle(routine.streak > 0 ? accent : .secondary)
                 Text("\(routine.streak)")
                     .font(.system(size: 42, weight: .bold, design: .rounded))
                     .foregroundStyle(accent)
@@ -160,7 +181,7 @@ struct HabitsView: View {
             Button {
                 completeToday(routine)
             } label: {
-                Label(routine.isDoneToday ? "今日已打卡" : "完成今日习惯", systemImage: routine.isDoneToday ? "checkmark" : "plus")
+                Label(routine.isDoneToday ? "今日已完成" : "完成今日打卡", systemImage: "checkmark.circle.fill")
                     .frame(maxWidth: .infinity)
             }
             .buttonStyle(.borderedProminent)
