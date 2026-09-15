@@ -25,24 +25,30 @@ struct FocusView: View {
         self.availableTasks = availableTasks
         self.log = log
         self.onComplete = onComplete
-        if let restored {
-            let restoredSessions = restored.sessions.compactMap { record -> FocusCountdown? in
-                guard let match = availableTasks.first(where: { $0.id == record.taskId }) ?? (task.id == record.taskId ? task : nil) else { return nil }
-                return FocusCountdown(
-                    task: match,
-                    startedAt: record.startedAt,
-                    secondsRemaining: record.secondsRemaining,
-                    focusedSeconds: record.focusedSeconds,
-                    isPaused: record.isPaused
-                )
-            }
-            _sessions = State(initialValue: restoredSessions.isEmpty ? [FocusCountdown(task: task)] : restoredSessions)
-            _focusMode = State(initialValue: restored.mode)
-            _running = State(initialValue: restored.running)
-            _lastTickAt = State(initialValue: restored.lastTickAt)
-            _protectedFocusWasInterrupted = State(initialValue: restored.interrupted)
+        let snapshot = restored ?? FocusSessionStore.load()
+        let recovered = snapshot.map { Self.countdowns(from: $0, task: task, availableTasks: availableTasks) } ?? []
+        if let snapshot, !recovered.isEmpty {
+            _sessions = State(initialValue: recovered)
+            _focusMode = State(initialValue: snapshot.mode)
+            _running = State(initialValue: snapshot.running)
+            _lastTickAt = State(initialValue: snapshot.lastTickAt)
+            _protectedFocusWasInterrupted = State(initialValue: snapshot.interrupted)
         } else {
-            _sessions = State(initialValue: [FocusCountdown(task: task)])
+            _sessions = State(initialValue: task.status == .complete ? [] : [FocusCountdown(task: task)])
+        }
+    }
+
+    private static func countdowns(from restored: PersistedFocusState, task: KairosTask, availableTasks: [KairosTask]) -> [FocusCountdown] {
+        restored.sessions.compactMap { record -> FocusCountdown? in
+            guard let match = availableTasks.first(where: { $0.id == record.taskId }) ?? (task.id == record.taskId ? task : nil) else { return nil }
+            guard match.status != .complete else { return nil }
+            return FocusCountdown(
+                task: match,
+                startedAt: record.startedAt,
+                secondsRemaining: record.secondsRemaining,
+                focusedSeconds: record.focusedSeconds,
+                isPaused: record.isPaused
+            )
         }
     }
 
@@ -68,6 +74,15 @@ struct FocusView: View {
                             focusControls.frame(width: min(310, geometry.size.width * 0.32))
                         }
                         .frame(minHeight: geometry.size.height).padding(.horizontal, 52)
+                    } else if sessions.count > 1 {
+                        VStack(spacing: 20) {
+                            Spacer(minLength: 12)
+                            focusReadout(isLandscape: false)
+                            Spacer(minLength: 12)
+                            focusControls
+                        }
+                        .frame(maxWidth: 650, minHeight: geometry.size.height)
+                        .frame(maxWidth: .infinity).padding(.horizontal, 28)
                     } else {
                         VStack(spacing: 28) {
                             Spacer(minLength: 34)
@@ -84,6 +99,12 @@ struct FocusView: View {
             if focusMode == nil { focusModePicker.transition(.opacity.combined(with: .scale)) }
         }
         .onAppear {
+            if sessions.isEmpty {
+                FocusSessionStore.clear()
+                LiveActivityManager.end()
+                dismiss()
+                return
+            }
             guard focusMode != nil else { return }
             UIApplication.shared.isIdleTimerDisabled = focusMode == .stayOnScreen
             startLiveActivity()
@@ -222,21 +243,20 @@ struct FocusView: View {
         let elapsed = max(0, Int(now.timeIntervalSince(lastTickAt)))
         guard elapsed > 0 else { return }
         lastTickAt = lastTickAt.addingTimeInterval(TimeInterval(elapsed))
+        var finished: [FocusCountdown] = []
         for index in sessions.indices {
             let oldValue = sessions[index].secondsRemaining
             sessions[index].consume(elapsed)
             if oldValue > 0, sessions[index].secondsRemaining == 0 {
                 log("Focus timer finished", sessions[index].task, "Countdown completed.")
                 FocusCue.timerFinished()
+                finished.append(sessions[index])
             }
         }
         running = anyTicking
-        if sessions.allSatisfy({ $0.secondsRemaining == 0 }) {
-            running = false
-            LiveActivityManager.end()
-            FocusSessionStore.clear()
-        } else {
-            persistAndSync()
+        persistAndSync()
+        for session in finished {
+            finish(session)
         }
     }
 
@@ -274,6 +294,10 @@ struct FocusView: View {
 
     private func complete(_ session: FocusCountdown) {
         consumeElapsed(to: .now)
+        finish(session)
+    }
+
+    private func finish(_ session: FocusCountdown) {
         guard let latest = sessions.first(where: { $0.id == session.id }) else { return }
         latest.task.status = .complete
         let endedAt = Date.now
@@ -286,12 +310,13 @@ struct FocusView: View {
             dismiss()
         } else {
             lastTickAt = .now
+            running = anyTicking
             persistAndSync()
         }
     }
 
     private var focusModePicker: some View {
-        ZStack {
+        ZStack(alignment: .topLeading) {
             LinearGradient(colors: [.kairosIndigo, .kairosPurple, .kairosBlue], startPoint: .topLeading, endPoint: .bottomTrailing).ignoresSafeArea()
             VStack(spacing: 18) {
                 Image(systemName: "sparkles").font(.largeTitle).foregroundStyle(Color.kairosSun)
@@ -300,7 +325,42 @@ struct FocusView: View {
                 focusModeButton(title: "保持当前屏幕", detail: "离开 Kairos 时自动暂停", icon: "lock.iphone", mode: .stayOnScreen)
                 focusModeButton(title: "普通专注", detail: "锁屏或切换 App，计时继续", icon: "timer", mode: .standard)
             }.frame(maxWidth: 560).padding(28).foregroundStyle(.white)
+            Button(action: dismissFocusPicker) {
+                Image(systemName: "xmark")
+                    .font(.body.weight(.semibold))
+                    .foregroundStyle(.white)
+                    .frame(width: 36, height: 36)
+                    .background(.white.opacity(0.18), in: Circle())
+            }
+            .padding(.leading, 20)
+            .safeAreaPadding(.top, 10)
+            .accessibilityLabel("关闭")
         }
+        .simultaneousGesture(swipeBackToExit)
+        .overlay(alignment: .leading) {
+            VStack(spacing: 0) {
+                Color.clear.frame(height: 72)
+                Color.clear
+                    .frame(width: 28)
+                    .frame(maxHeight: .infinity)
+                    .contentShape(Rectangle())
+                    .gesture(swipeBackToExit)
+            }
+        }
+    }
+
+    private var swipeBackToExit: some Gesture {
+        DragGesture(minimumDistance: 24, coordinateSpace: .global)
+            .onEnded { value in
+                let wentRight = value.translation.width > 80
+                let mostlyHorizontal = abs(value.translation.height) < 120
+                if wentRight, mostlyHorizontal { dismissFocusPicker() }
+            }
+    }
+
+    private func dismissFocusPicker() {
+        FocusSessionStore.clear()
+        dismiss()
     }
 
     private func focusModeButton(title: String, detail: String, icon: String, mode: FocusMode) -> some View {

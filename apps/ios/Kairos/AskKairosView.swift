@@ -17,7 +17,7 @@ struct AskKairosView: View {
     @State private var localFlow: GuidedLocalFlow?
     @FocusState private var inputFocused: Bool
 
-    private let examples = ["我今天很累", "推迟 30 分钟", "今晚添加刷两道 LeetCode，40 分钟"]
+    private let examples = ["我今天很累", "推迟 30 分钟", "今晚添加刷两道 LeetCode，40 分钟", "时间不够，先做哪个最重要？"]
 
     var body: some View {
             ZStack {

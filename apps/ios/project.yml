@@ -22,7 +22,7 @@ targets:
         CFBundleDisplayName: Kairos
         LSApplicationCategoryType: public.app-category.productivity
         NSCalendarsFullAccessUsageDescription: Kairos saves completed focus sessions to your Apple Calendar when you enable this setting.
-        NSLocationWhenInUseUsageDescription: Kairos uses your approximate location to show current local weather.
+        NSLocationWhenInUseUsageDescription: Kairos uses your location to show local weather and to tell which tasks you can do at home versus while you are out.
         NSLocalNetworkUsageDescription: Kairos connects to your local Agent service during development.
         NSAppTransportSecurity:
           NSAllowsLocalNetworking: true
@@ -43,3 +43,7 @@ targets:
     sources: [KairosTests]
     dependencies:
       - target: Kairos
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        PRODUCT_BUNDLE_IDENTIFIER: com.xiaoyu.kairos.KairosTests

@@ -1,10 +1,13 @@
+import SwiftData
 import SwiftUI
 
 struct DayReviewView: View {
+    @Environment(\.modelContext) private var context
     let events: [ActivityEvent]
     let completed: [KairosTask]
     var tasks: [KairosTask] = []
     @State private var showingCompleted = false
+    @State private var readdedTitle: String?
 
     private var today: [ActivityEvent] { events.filter { Calendar.current.isDateInToday($0.timestamp) } }
     private var timeBias: TimeBiasProfile { TimeBiasReflector.profile(tasks: tasks.isEmpty ? completed : tasks, events: events) }
@@ -18,7 +21,7 @@ struct DayReviewView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 22) {
                     VStack(alignment: .leading, spacing: 6) { Text("今日节奏").font(.caption2.bold()).tracking(1.5).foregroundStyle(Color.kairosPurple); Text("回顾这一天").font(.system(size: 36, weight: .bold, design: .serif)); Text("按发生顺序看看你做了什么。").foregroundStyle(.secondary) }
-                    HStack { completedStat; stat("\(actualFocusedMinutes > 0 ? actualFocusedMinutes : completed.reduce(0) { $0 + $1.estimatedMinutes }) 分钟", "真实专注"); stat("\(today.filter { $0.action.contains("Focus") }.count)", "专注事件") }
+                    HStack { completedStat; stat("\(actualFocusedMinutes) 分钟", "所用时间"); stat("\(today.filter { $0.action.contains("Focus") }.count)", "专注事件") }
                     if let insight = timeBias.insights.first {
                         timeBiasCard(insight)
                     }
@@ -29,6 +32,11 @@ struct DayReviewView: View {
             .navigationTitle("回顾")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar(.visible, for: .navigationBar)
+            .alert("已加入待办", isPresented: Binding(get: { readdedTitle != nil }, set: { if !$0 { readdedTitle = nil } })) {
+                Button("好") { readdedTitle = nil }
+            } message: {
+                Text("“\(readdedTitle ?? "")”已经再次出现在首页。")
+            }
     }
 
     private func stat(_ value: String, _ label: String) -> some View { VStack(alignment: .leading) { Text(value).font(.title2.bold()).foregroundStyle(Color.kairosPurple); Text(label).font(.caption).foregroundStyle(.secondary) }.frame(maxWidth: .infinity, alignment: .leading).padding(14).background(LinearGradient(colors: [.white, .kairosPurple.opacity(0.09)], startPoint: .topLeading, endPoint: .bottomTrailing), in: RoundedRectangle(cornerRadius: 6)) }
@@ -80,16 +88,49 @@ struct DayReviewView: View {
             HStack { Text("已完成的任务").font(.headline); Spacer(); Button("全部动态") { withAnimation { showingCompleted = false } }.font(.caption.bold()) }
             if completed.isEmpty { ContentUnavailableView("还没有完成的任务", systemImage: "checkmark.circle", description: Text("完成任务后会出现在这里。")) }
             ForEach(completed.sorted { completionDate(for: $0) > completionDate(for: $1) }) { task in
-                VStack(alignment: .leading, spacing: 7) {
-                    HStack { Image(systemName: "checkmark.circle.fill").foregroundStyle(Color.kairosGreen); Text(task.title).font(.headline); Spacer(); Text(completionDate(for: task).formatted(date: .abbreviated, time: .shortened)).font(.caption2).foregroundStyle(.secondary) }
-                    if !task.goal.isEmpty { Text(task.goal).font(.subheadline).foregroundStyle(.secondary) }
-                    HStack { Label("\(task.estimatedMinutes) 分钟", systemImage: "timer"); Text("优先级 \(task.priority)"); Spacer(); Button("恢复为待办") { task.status = .todo }.font(.caption.bold()) }.font(.caption).foregroundStyle(.secondary)
-                }.padding(14).background(Color.kairosGreen.opacity(0.07), in: RoundedRectangle(cornerRadius: 7))
+                Button { readd(task) } label: {
+                    VStack(alignment: .leading, spacing: 7) {
+                        HStack { Image(systemName: "checkmark.circle.fill").foregroundStyle(Color.kairosGreen); Text(task.title).font(.headline).foregroundStyle(.primary); Spacer(); Text(completionDate(for: task).formatted(date: .abbreviated, time: .shortened)).font(.caption2).foregroundStyle(.secondary) }
+                        if !task.goal.isEmpty { Text(task.goal).font(.subheadline).foregroundStyle(.secondary) }
+                        HStack {
+                            Label(actualDurationLabel(for: task), systemImage: "timer")
+                            Text("优先级 \(task.priority)")
+                            Spacer()
+                            Text("再做一次").font(.caption.bold()).foregroundStyle(Color.kairosIndigo)
+                        }.font(.caption).foregroundStyle(.secondary)
+                    }.padding(14).background(Color.kairosGreen.opacity(0.07), in: RoundedRectangle(cornerRadius: 7))
+                }
+                .buttonStyle(.plain)
+                .accessibilityHint("再次添加这个任务到待办")
             }
         }.padding(18).background(.white, in: RoundedRectangle(cornerRadius: 8)).transition(.opacity.combined(with: .move(edge: .bottom)))
     }
 
     private func completionDate(for task: KairosTask) -> Date {
         events.first(where: { $0.action == "Completed" && $0.taskTitle == task.title })?.timestamp ?? task.createdAt
+    }
+
+    private func actualDurationLabel(for task: KairosTask) -> String {
+        if let minutes = actualMinutes(for: task) {
+            return "实际 \(minutes) 分钟"
+        }
+        return "未记录实际用时"
+    }
+
+    private func actualMinutes(for task: KairosTask) -> Int? {
+        TimeBiasReflector.samples(from: tasks.isEmpty ? completed : tasks, events: events)
+            .filter { $0.taskTitle == task.title }
+            .sorted { $0.completedAt > $1.completedAt }
+            .first?.actualMinutes
+    }
+
+    private func readd(_ task: KairosTask) {
+        let copy = task.duplicatedAsTodo(scheduledStart: nil, keepRepeat: task.repeatsDaily)
+        context.insert(copy)
+        context.insert(ActivityEvent(action: "Task created", taskTitle: copy.title, detail: "Re-added from review."))
+        if copy.repeatsDaily {
+            HabitTracker.ensureRoutine(for: copy, in: context)
+        }
+        readdedTitle = copy.title
     }
 }

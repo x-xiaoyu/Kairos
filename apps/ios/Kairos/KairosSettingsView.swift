@@ -6,6 +6,7 @@ struct KairosSettingsView: View {
     @AppStorage("agentServerURL") private var agentServerURL = "http://127.0.0.1:8000"
     @AppStorage("agentMode") private var agentMode = "local"
     @State private var showingPersonalAI = false
+    @StateObject private var homePicker = HomeLocationPicker()
 
     var body: some View {
             Form {
@@ -32,6 +33,27 @@ struct KairosSettingsView: View {
                     } else {
                         Text("本地模式不需要网络，但只能理解 App 已内置的常见任务操作。")
                             .font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+                Section("家庭地址") {
+                    if let home = HomeLocation.stored {
+                        LabeledContent("家", value: home.address)
+                    } else {
+                        Text("还没有家的位置。设好后，Kairos 才能区分在家能做的事和要出门的事。")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    Button {
+                        homePicker.captureCurrentAsHome()
+                    } label: {
+                        Label(homePicker.isSaving ? "正在定位…" : "把当前位置设为家", systemImage: "house.fill")
+                    }
+                    .disabled(homePicker.isSaving)
+                    if HomeLocation.stored != nil {
+                        Button("清除家庭地址", role: .destructive, action: homePicker.clear)
+                    }
+                    if let message = homePicker.message {
+                        Text(message).font(.caption).foregroundStyle(.secondary)
                     }
                 }
                 Section("天气") {

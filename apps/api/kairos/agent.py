@@ -74,6 +74,9 @@ For N questions/items, return N create_task actions in order unless the learned 
             title = low.get("title") if low else ("先休息几分钟" if zh else "take a short reset")
             return {"assistant_message": f"没关系。建议先做“{title}”，把高认知任务留到状态更好的时间。" if zh else f"Start with {title} and protect demanding work for a better window.", "proposed_actions": [{"action": "replan", "task_id": low.get("id") if low else None, "requires_confirmation": False}]}
 
+        if any(word in lower for word in ("该做", "先做哪", "先做什么", "现在做什么", "来得及", "时间不够", "优先做", "哪个最重要", "what should i do", "which first")):
+            return self._priority_proposal(active, now, zh)
+
         if any(word in lower for word in ("推迟", "延后", "晚点", "postpone", "delay")):
             if not target:
                 return self._no_task(zh)
@@ -186,6 +189,58 @@ For N questions/items, return N create_task actions in order unless the learned 
     @staticmethod
     def _remove_count(title: str) -> str:
         return re.sub(r"(?:\d+|二|两|三|四|五|六|七|八|九|十)\s*(?:道|个)", "", title).strip()
+
+    @staticmethod
+    def _priority_proposal(active: list[dict], now: datetime, zh: bool) -> dict:
+        if not active:
+            return KairosAdvisor._no_task(zh)
+        end_of_day = now.replace(hour=23, minute=59, second=0, microsecond=0)
+        deadlines = []
+        for task in active:
+            raw = task.get("deadline")
+            if not raw:
+                continue
+            try:
+                deadline = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+            except ValueError:
+                continue
+            if deadline.date() == now.date():
+                deadlines.append(deadline)
+        horizon = min(max(deadlines), end_of_day) if deadlines else end_of_day
+        remaining = max(0, int((horizon - now).total_seconds() // 60))
+        needed = sum(max(0, int(task.get("estimated_minutes") or 0)) for task in active)
+        ranked = sorted(
+            active,
+            key=lambda task: (
+                0 if task.get("deadline_type") == "hard" else 1 if task.get("deadline") else 2,
+                str(task.get("deadline") or "9999"),
+                -int(task.get("priority") or 0),
+            ),
+        )
+        pick = ranked[0]
+        short = len(active) >= 2 and needed > remaining
+        title = pick.get("title") or ("这项任务" if zh else "this task")
+        if short:
+            message = (
+                f"剩下大约 {remaining} 分钟，这 {len(active)} 项大约需要 {needed} 分钟。时间不够一次做完，建议先做“{title}”。要先做它吗？"
+                if zh
+                else f"About {remaining} minutes left for {needed} minutes of work. Start {title} first?"
+            )
+        else:
+            message = (
+                f"综合截止时间和优先级，现在最合适先做“{title}”。要先做它吗？"
+                if zh
+                else f"Based on deadlines and priority, start {title} first?"
+            )
+        return {
+            "assistant_message": message,
+            "proposed_actions": [{
+                "action": "start_focus",
+                "task_id": pick.get("id"),
+                "task_title": title,
+                "requires_confirmation": True,
+            }],
+        }
 
     @staticmethod
     def _no_task(zh: bool) -> dict:

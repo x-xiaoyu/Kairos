@@ -32,7 +32,7 @@ struct PersonalAIService {
                     "items": [
                         "type": "object", "additionalProperties": false,
                         "properties": [
-                            "action": ["type": "string", "enum": ["create_task", "postpone_task", "change_duration", "change_priority", "complete_task", "replan", "no_action"]],
+                            "action": ["type": "string", "enum": ["create_task", "postpone_task", "change_duration", "change_priority", "complete_task", "replan", "start_focus", "no_action"]],
                             "task_id": ["type": ["string", "null"]],
                             "task_title": ["type": ["string", "null"]],
                             "value": ["type": ["integer", "null"]],
@@ -61,6 +61,7 @@ struct PersonalAIService {
             使用这些确定默认值，不要为它们追问：未说日期=设备时区中的今天；未说频率=仅一次；未说时长=每条30分钟；未说具体时间=今天23:59。所有 deadline 必须带设备时区偏移的 ISO 8601。
             用户说刷/做 N 个或 N 道题时，默认创建 N 个 create_task action，并用“（1/N）”编号。只有明确说合并，或用户学习偏好是 combined，才创建一条。若只给一个总时长，平均分给 N 条；若说每题/每个，则每条使用该时长。
             不要询问时区、日期、频率、拆分方式、时长或优先级；采用默认值并在 assistant_message 简短说明。相同截止时间的 action 保持用户说出的顺序。
+            若用户问今天来不来得及、该先做什么、时间不够、或哪个最重要：先估算所需总时长与剩余时间。不够一次做完时，只提出 start_focus 一项最重要的任务，明确说明时间不够，并 requires_confirmation=true 问用户是否先做它。不要同时催多项。
             当前用户的计数任务偏好：\(countedTaskStyle)。
             """,
             "input": "设备时区：\(TimeZone.current.identifier)（GMT\(TimeZone.current.secondsFromGMT() / 3600)）\n本地当前时间：\(localNow)\n本地今天：\(today)\n当前任务：\(context)\n用户：\(message)",
@@ -176,6 +177,96 @@ struct PersonalAIService {
         )
     }
 
+    func refineTimeShortRecommendation(
+        _ fallback: KairosRecommendation,
+        pick: PlannedTask,
+        budget: TimeBudgetSnapshot
+    ) async throws -> KairosRecommendation {
+        guard let apiKey = KeychainStore.read(account: "openai-api-key"), !apiKey.isEmpty else {
+            throw PersonalAIError.notConnected
+        }
+        let schema: [String: Any] = [
+            "type": "object",
+            "additionalProperties": false,
+            "properties": [
+                "headline": ["type": "string"],
+                "reason": ["type": "string"],
+                "consequence": ["type": "string"],
+                "confirm_prompt": ["type": "string"],
+                "primary_action": ["type": "string"],
+                "secondary_action": ["type": "string"],
+            ],
+            "required": ["headline", "reason", "consequence", "confirm_prompt", "primary_action", "secondary_action"],
+        ]
+        let body: [String: Any] = [
+            "model": UserDefaults.standard.string(forKey: "openAIModel").flatMap { $0.isEmpty ? nil : $0 } ?? "gpt-5-mini",
+            "instructions": """
+            你是 Kairos，一位冷静、不评判的 ADHD 执行功能辅助 Agent。
+            确定性排程器已经选定唯一优先任务；你只能精炼中文表达，不能换任务、修改时间数学或暗示同时开始其他任务。
+            清楚说明今天时间不足，只提出一个选择，并以问题向用户确认是否先做选定任务。
+            避免责备、恐吓和“必须、不能再拖、立即开始”等措辞。所有字段保持简短。
+            """,
+            "input": """
+            唯一选定任务：\(pick.task.title)
+            剩余时间：\(TimeBudget.remainingTimeText(minutes: budget.remainingMinutes))
+            \(budget.taskCount) 项预计总耗时：\(TimeBudget.remainingTimeText(minutes: budget.neededMinutes))
+            本地兜底：
+            headline=\(fallback.headline)
+            reason=\(fallback.reason)
+            consequence=\(fallback.consequence)
+            confirm_prompt=\(fallback.confirmPrompt)
+            """,
+            "text": ["format": ["type": "json_schema", "name": "kairos_time_short_recommendation", "strict": true, "schema": schema]],
+        ]
+
+        var request = URLRequest(url: URL(string: "https://api.openai.com/v1/responses")!)
+        request.httpMethod = "POST"
+        request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse else { throw PersonalAIError.invalidResponse }
+        guard 200..<300 ~= http.statusCode else {
+            let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+            let error = object?["error"] as? [String: Any]
+            throw PersonalAIError.provider(error?["message"] as? String ?? "OpenAI 请求失败（\(http.statusCode)）。")
+        }
+        guard let object = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            throw PersonalAIError.invalidResponse
+        }
+        let nestedText = (object["output"] as? [[String: Any]])?
+            .compactMap { $0["content"] as? [[String: Any]] }
+            .flatMap { $0 }
+            .first { $0["type"] as? String == "output_text" }?["text"] as? String
+        guard let rawText = (object["output_text"] as? String) ?? nestedText else {
+            throw PersonalAIError.invalidResponse
+        }
+        let text = Self.removingMarkdownFence(from: rawText)
+        guard let replyData = text.data(using: .utf8) else { throw PersonalAIError.invalidResponse }
+        let dto = try JSONDecoder().decode(TimeShortRecommendationDTO.self, from: replyData)
+        let fields = [dto.headline, dto.reason, dto.consequence, dto.confirmPrompt, dto.primaryAction, dto.secondaryAction]
+        guard fields.allSatisfy({ !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }),
+              !NudgeEngine.isJudgmental(fields.joined(separator: " ")),
+              dto.headline.contains(pick.task.title),
+              dto.confirmPrompt.contains(pick.task.title),
+              dto.primaryAction.contains(pick.task.title) else {
+            return fallback
+        }
+        return KairosRecommendation(
+            eyebrow: fallback.eyebrow,
+            headline: dto.headline,
+            reason: dto.reason,
+            consequence: dto.consequence,
+            confirmPrompt: dto.confirmPrompt,
+            primaryActionTitle: dto.primaryAction,
+            secondaryActionTitle: dto.secondaryAction,
+            urgency: fallback.urgency,
+            pickID: fallback.pickID,
+            isTimeShort: fallback.isTimeShort,
+            confirmToken: fallback.confirmToken
+        )
+    }
+
     private static func removingMarkdownFence(from text: String) -> String {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard trimmed.hasPrefix("```") else { return trimmed }
@@ -183,6 +274,22 @@ struct PersonalAIService {
         if !lines.isEmpty { lines.removeFirst() }
         if lines.last?.trimmingCharacters(in: .whitespacesAndNewlines) == "```" { lines.removeLast() }
         return lines.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+}
+
+private struct TimeShortRecommendationDTO: Decodable {
+    let headline: String
+    let reason: String
+    let consequence: String
+    let confirmPrompt: String
+    let primaryAction: String
+    let secondaryAction: String
+
+    enum CodingKeys: String, CodingKey {
+        case headline, reason, consequence
+        case confirmPrompt = "confirm_prompt"
+        case primaryAction = "primary_action"
+        case secondaryAction = "secondary_action"
     }
 }
 

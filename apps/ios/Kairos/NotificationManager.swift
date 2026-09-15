@@ -60,14 +60,15 @@ final class NotificationManager: ObservableObject {
         }
     }
 
-    func reschedule(plan: [PlannedTask]) async {
+    func reschedule(plan: [PlannedTask], focusTaskID: UUID? = nil) async {
         let center = UNUserNotificationCenter.current()
         let pending = await center.pendingNotificationRequests()
         let kairosIDs = pending.map(\.identifier).filter {
             $0.hasPrefix("task-start-") || $0.hasPrefix("task-transition-") || $0.hasPrefix("latest-safe-") || $0.hasPrefix("deadline-")
         }
         center.removePendingNotificationRequests(withIdentifiers: kairosIDs)
-        for item in plan.prefix(12) { await schedule(for: item) }
+        let selected = focusTaskID.map { id in plan.filter { $0.task.id == id } } ?? Array(plan.prefix(12))
+        for item in selected { await schedule(for: item) }
     }
 
     private func addNotification(id: String, at date: Date, nudge: KairosAgentNudge, task: KairosTask) async {

@@ -7,13 +7,14 @@ final class WeatherManager: NSObject, ObservableObject {
     @Published private(set) var temperature: String?
     @Published private(set) var condition = "暂时无法获取天气"
     @Published private(set) var locationName = "当前位置"
+    @Published private(set) var lastLocation: CLLocation?
 
     private let locationManager = CLLocationManager()
 
     override init() {
         super.init()
         locationManager.delegate = self
-        locationManager.desiredAccuracy = kCLLocationAccuracyKilometer
+        locationManager.desiredAccuracy = kCLLocationAccuracyHundredMeters
     }
 
     func refresh() {
@@ -31,6 +32,7 @@ final class WeatherManager: NSObject, ObservableObject {
     }
 
     private func handleLocation(_ location: CLLocation) {
+        lastLocation = location
         Task {
             await resolvePlace(for: location)
             await load(latitude: location.coordinate.latitude, longitude: location.coordinate.longitude)

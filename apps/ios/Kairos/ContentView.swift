@@ -1,5 +1,6 @@
 import SwiftData
 import SwiftUI
+import UIKit
 
 struct ContentView: View {
     @Environment(\.modelContext) private var context
@@ -13,6 +14,7 @@ struct ContentView: View {
     @AppStorage("weatherUnit") private var weatherUnit = "automatic"
     @AppStorage("personalMotto") private var personalMotto = "此刻最重要的事"
     @AppStorage("personalSubgoal") private var personalSubgoal = "最稳妥的下一步已经排在最上面。"
+    @AppStorage("userContextMode") private var userContextModeRaw = UserContextMode.auto.rawValue
     @State private var showingNewTask = false
     @State private var showingReview = false
     @State private var showingRoutines = false
@@ -25,15 +27,19 @@ struct ContentView: View {
     @State private var lastUrgencyPromptAt = Date.distantPast
     @State private var focusTask: KairosTask?
     @State private var restoredFocus: PersistedFocusState?
+    @State private var focusGeneration = UUID()
     @State private var graceOffer: GraceMessageOffer?
     @State private var now = Date.now
+    @State private var swipedTaskID: UUID?
+    @State private var dismissedTimeShortToken: String?
+    @State private var refinedRecommendation: KairosRecommendation?
 
     private let clock = Timer.publish(every: 60, on: .main, in: .common).autoconnect()
     private var timeBias: TimeBiasProfile { TimeBiasReflector.profile(tasks: tasks, events: events) }
     private var plan: [PlannedTask] { Planner.makePlan(tasks: tasks, now: now, bias: timeBias) }
     private var notificationFingerprint: [String] {
         plan.map { item in
-            "\(item.task.id)-\(item.task.title)-\(item.task.deadline?.timeIntervalSince1970 ?? 0)-\(item.task.scheduledStart?.timeIntervalSince1970 ?? 0)-\(item.latestSafeStart?.timeIntervalSince1970 ?? 0)-\(item.task.isPrimaryCountdown)-\(item.task.dayOrder)-\(item.task.cognitiveLoad.rawValue)-\(item.task.estimatedMinutes)-\(item.task.timeBiasCalibrationRaw)-\(timeBias.overallRatio)"
+            "\(item.task.id)-\(item.task.title)-\(item.task.deadline?.timeIntervalSince1970 ?? 0)-\(item.task.scheduledStart?.timeIntervalSince1970 ?? 0)-\(item.latestSafeStart?.timeIntervalSince1970 ?? 0)-\(item.task.isPrimaryCountdown)-\(item.task.dayOrder)-\(item.task.cognitiveLoad.rawValue)-\(item.task.estimatedMinutes)-\(item.task.timeBiasCalibrationRaw)-\(item.task.repeatsDaily)-\(timeBias.overallRatio)-\(timeBudget.confirmToken)-\(timeBudget.remainingMinutes)"
         }
     }
     private var countdownTask: KairosTask? {
@@ -41,9 +47,34 @@ struct ContentView: View {
             ?? plan.first(where: { $0.task.deadline != nil })?.task
     }
     private var nextTaskBiasInsight: TimeBiasInsight? {
-        guard let task = plan.first?.task, timeBias.shouldCalibrate(task.cognitiveLoad) else { return nil }
+        guard let task = suggestedItem?.task ?? plan.first?.task, timeBias.shouldCalibrate(task.cognitiveLoad) else { return nil }
         return TimeBiasReflector.insight(for: task.cognitiveLoad, tasks: tasks, events: events)
             ?? timeBias.insights.first { $0.isCalibration }
+    }
+    private var contextMode: UserContextMode {
+        UserContextMode(rawValue: userContextModeRaw) ?? .auto
+    }
+    private var presence: PlacePresence {
+        PlaceContext.resolvedPresence(mode: contextMode, current: weather.lastLocation, home: HomeLocation.stored)
+    }
+    private var timeBudget: TimeBudgetSnapshot {
+        TimeBudget.evaluate(plan: plan, now: now, presence: presence)
+    }
+    private var suggestedItem: PlannedTask? {
+        timeBudget.pick
+    }
+    private var visibleRecommendation: KairosRecommendation? {
+        let local = KairosAdvisor.recommendation(for: plan, presence: presence, now: now)
+        let rec = (refinedRecommendation?.confirmToken == local?.confirmToken ? refinedRecommendation : nil) ?? local
+        guard let rec else { return nil }
+        if rec.isTimeShort, dismissedTimeShortToken == rec.confirmToken { return nil }
+        return rec
+    }
+    private var doableNow: [PlannedTask] {
+        plan.filter { PlaceContext.shouldHighlightNow($0, presence: presence) }
+    }
+    private var laterByPlace: [PlannedTask] {
+        plan.filter { !PlaceContext.shouldHighlightNow($0, presence: presence) }
     }
 
     var body: some View {
@@ -56,7 +87,7 @@ struct ContentView: View {
                     VStack(alignment: .leading, spacing: 24) {
                         topHeader
                         greeting
-                        if let insight = nextTaskBiasInsight, let current = plan.first {
+                        if let insight = nextTaskBiasInsight, let current = suggestedItem ?? plan.first {
                             TimeBiasInsightBubble(
                                 text: insight.message(forEstimatedMinutes: current.task.estimatedMinutes),
                                 choice: current.task.timeBiasCalibration,
@@ -64,7 +95,7 @@ struct ContentView: View {
                                 onKeepEstimate: { declineTimeBias(for: current.task) }
                             )
                         }
-                        if let recommendation = KairosAdvisor.recommendation(for: plan) { agentCard(recommendation) }
+                        if let recommendation = visibleRecommendation { agentCard(recommendation) }
                         if plan.isEmpty { emptyState } else { planList }
                     }.padding(20)
                 }
@@ -107,13 +138,16 @@ struct ContentView: View {
             .fullScreenCover(item: $focusTask) { task in FocusView(task: task, availableTasks: tasks, restored: restoredFocus, log: { action, focusedTask, detail in
                 log(action, focusedTask.title, detail)
             }, onComplete: { completedTask, startedAt, endedAt, focusedSeconds in
+                HabitTracker.handleCompletion(completedTask, in: context, existingTasks: tasks)
                 guard saveFocusToCalendar else { return }
                 Task {
                     let saved = await calendar.saveFocusSession(task: completedTask, startedAt: startedAt, endedAt: endedAt, focusedSeconds: focusedSeconds)
                     log(saved ? "Added to Calendar" : "Calendar save failed", completedTask.title, saved ? "已把这段真实专注写入日历。" : (calendar.lastError ?? "日历不可用。"))
                     calendarSaveMessage = saved ? "已将“\(completedTask.title)”的专注时段存入 Apple 日历。" : (calendar.lastError ?? "无法写入 Apple 日历。")
                 }
-            }) }
+            })
+            .id(focusGeneration)
+            }
             .alert("Apple 日历", isPresented: Binding(get: { calendarSaveMessage != nil }, set: { if !$0 { calendarSaveMessage = nil } })) {
                 Button("好") { calendarSaveMessage = nil }
             } message: {
@@ -122,16 +156,30 @@ struct ContentView: View {
             .task {
                 weather.refresh()
                 await notifications.requestPermission()
-                await notifications.reschedule(plan: plan)
+                await notifications.reschedule(plan: plan, focusTaskID: timeBudget.isShort ? timeBudget.pick?.id : nil)
                 WidgetSnapshotStore.update(plan: plan, primaryCountdown: countdownTask)
                 try? await Task.sleep(for: .milliseconds(500))
                 restorePersistedFocus()
+                HabitTracker.refreshBrokenStreaks(in: context)
                 if focusTask == nil { checkForStartReminder() }
                 if startReminderTask == nil { checkForUrgentTask() }
             }
+            .task(id: timeBudget.confirmToken) {
+                guard let local = KairosAdvisor.recommendation(for: plan, presence: presence, now: now),
+                      local.isTimeShort,
+                      let pick = timeBudget.pick else {
+                    refinedRecommendation = nil
+                    return
+                }
+                refinedRecommendation = await KairosAdvisor.refineRecommendation(
+                    local,
+                    pick: pick,
+                    budget: timeBudget
+                )
+            }
             .onChange(of: notificationFingerprint) { _, _ in
                 WidgetSnapshotStore.update(plan: plan, primaryCountdown: countdownTask)
-                Task { await notifications.reschedule(plan: plan) }
+                Task { await notifications.reschedule(plan: plan, focusTaskID: timeBudget.isShort ? timeBudget.pick?.id : nil) }
                 checkForStartReminder()
             }
             .onChange(of: focusTask) { _, task in
@@ -144,6 +192,7 @@ struct ContentView: View {
             .onChange(of: scenePhase) { _, phase in
                 if phase == .active {
                     now = .now
+                    weather.refresh()
                     checkForStartReminder()
                     if startReminderTask == nil { checkForUrgentTask() }
                 }
@@ -176,19 +225,42 @@ struct ContentView: View {
 
     private func agentCard(_ recommendation: KairosRecommendation) -> some View {
         VStack(alignment: .leading, spacing: 13) {
+            Text(recommendation.eyebrow)
+                .font(.caption.bold())
+                .tracking(1)
+                .foregroundStyle(recommendation.isTimeShort ? Color.kairosCoral : Color.kairosPurple)
             Text(recommendation.headline).font(.title2.bold())
+            Text(recommendation.reason)
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
             Label(recommendation.consequence, systemImage: "arrow.triangle.branch").font(.subheadline.weight(.medium)).foregroundStyle(Color.kairosCoral)
-            if let current = plan.first {
+            if let current = plan.first(where: { $0.task.id == recommendation.pickID }) ?? suggestedItem ?? plan.first {
+                if !recommendation.confirmPrompt.isEmpty {
+                    Text(recommendation.confirmPrompt)
+                        .font(.subheadline.bold())
+                }
                 HStack(spacing: 8) {
-                    Button("开始当前任务") { startFocus(current.task, detail: "Kairos recommended starting now.") }
+                    Button(recommendation.primaryActionTitle) {
+                        dismissedTimeShortToken = recommendation.confirmToken
+                        startFocus(current.task, detail: recommendation.isTimeShort
+                            ? "User confirmed the time-budget priority recommendation."
+                            : "Kairos recommended starting now.")
+                    }
                         .buttonStyle(.borderedProminent)
-                    if let next = plan.dropFirst().first,
-                       Planner.isScheduledOnSameDay(current.task, next.task, now: now) {
-                        Button("顺延当前任务") { postponeCurrent(current.task, next: next.task) }
+                    if recommendation.isTimeShort {
+                        Button(recommendation.secondaryActionTitle) {
+                            dismissedTimeShortToken = recommendation.confirmToken
+                        }
+                        .buttonStyle(.bordered)
+                    } else if let next = plan.first(where: { $0.id != current.id }),
+                              Planner.isScheduledOnSameDay(current.task, next.task, now: now) {
+                        Button(recommendation.secondaryActionTitle) { postponeCurrent(current.task, next: next.task) }
                             .buttonStyle(.bordered)
                     }
-                    Button("结束任务") { complete(current.task) }
-                        .buttonStyle(.bordered)
+                    if !recommendation.isTimeShort {
+                        Button("结束任务") { complete(current.task) }
+                            .buttonStyle(.bordered)
+                    }
                 }
                 .font(.caption.weight(.semibold))
                 .controlSize(.small)
@@ -208,34 +280,33 @@ struct ContentView: View {
     }
 
     private var topHeader: some View {
-        HStack(alignment: .top) {
-            Button { weather.refresh() } label: {
-                HStack(spacing: 9) {
-                    Image(systemName: weather.symbol)
-                        .font(.title2)
-                        .symbolRenderingMode(.multicolor)
-                    VStack(alignment: .leading, spacing: 2) {
-                        if let temperature = weather.temperature {
-                            Text(temperature)
-                                .font(.title3.bold())
-                                .foregroundStyle(Color.kairosInk)
-                        }
-                        Text(weather.locationName)
-                            .font(.caption.weight(.medium))
-                            .foregroundStyle(Color.kairosInk.opacity(0.62))
-                            .lineLimit(1)
-                            .frame(maxWidth: 150, alignment: .leading)
-                    }
-                }
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("\(weather.condition)，地点：\(weather.locationName)\(weather.temperature.map { "，气温 \($0)" } ?? "")。点按刷新天气。")
-
-            Spacer()
+        HStack(alignment: .top, spacing: 12) {
+            ContextStatusCapsule(
+                presence: presence,
+                mode: contextMode,
+                weatherSummary: contextWeatherSummary,
+                weatherSymbol: weather.symbol,
+                onSelect: selectContextMode,
+                onOpenHomeSettings: { showingSettings = true }
+            )
+            Spacer(minLength: 10)
             if let countdownTask {
                 DeadlineDayCountdown(task: countdownTask, now: now)
             }
         }
+    }
+
+    private var contextWeatherSummary: String {
+        var parts: [String] = []
+        if let temperature = weather.temperature { parts.append(temperature) }
+        if !weather.condition.contains("无法") { parts.append(weather.condition) }
+        return parts.joined(separator: " ")
+    }
+
+    private func selectContextMode(_ mode: UserContextMode) {
+        guard mode.rawValue != userContextModeRaw else { return }
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        userContextModeRaw = mode.rawValue
     }
 
     private var greeting: some View {
@@ -276,26 +347,64 @@ struct ContentView: View {
     }
 
     private var planList: some View {
-        VStack(spacing: 14) {
-            ForEach(Array(plan.enumerated()), id: \.element.id) { index, item in
-                TaskCard(item: item, isNext: index == 0, accent: KairosTheme.accents[index % KairosTheme.accents.count], onFocus: { log("Focus started", item.task.title, "\(item.task.estimatedMinutes) minute countdown started."); focusTask = item.task }, onComplete: {
-                    item.task.status = .complete; log("Completed", item.task.title, "Task marked complete.")
-                }, onPostpone: {
-                    Planner.postponeWithinDay(item.task, among: tasks, minutes: 30, now: now)
-                    log("Postponed", item.task.title, "Moved later among tasks scheduled for the same day.")
-                    presentGrace(for: item.task, trigger: .postponed, revisedStart: revisedStart(for: item.task))
-                }, onGrace: (item.risk == .high || item.risk == .critical) ? { presentGrace(for: item.task, trigger: graceTrigger(for: item)) } : nil, onDelete: {
-                    log("Deleted", item.task.title, "Task deleted after confirmation.")
-                    context.delete(item.task)
-                })
+        VStack(alignment: .leading, spacing: 16) {
+            if !doableNow.isEmpty {
+                if presence != .unknown || !laterByPlace.isEmpty {
+                    Text("此刻能做").font(.caption.bold()).foregroundStyle(Color.kairosIndigo).tracking(1)
+                }
+                ForEach(Array(doableNow.enumerated()), id: \.element.id) { index, item in
+                    taskCard(item, accentIndex: index, deferred: false)
+                }
+            }
+            if !laterByPlace.isEmpty {
+                Text(PlaceContext.laterSectionTitle(presence: presence))
+                    .font(.caption.bold())
+                    .foregroundStyle(.secondary)
+                    .tracking(1)
+                    .padding(.top, 4)
+                ForEach(Array(laterByPlace.enumerated()), id: \.element.id) { index, item in
+                    taskCard(item, accentIndex: doableNow.count + index, deferred: true)
+                }
             }
         }
     }
 
+    private func taskCard(_ item: PlannedTask, accentIndex: Int, deferred: Bool) -> some View {
+        TaskCard(
+            item: item,
+            isNext: item.id == suggestedItem?.id,
+            accent: KairosTheme.accents[accentIndex % KairosTheme.accents.count],
+            swipedTaskID: $swipedTaskID,
+            placeNote: PlaceContext.availabilityNote(for: item, presence: presence),
+            isDeferred: deferred,
+            onFocus: { startFocus(item.task, detail: "\(item.task.estimatedMinutes) minute countdown started.") },
+            onComplete: { markTaskComplete(item.task, detail: "Task marked complete.") },
+            onPostpone: {
+                Planner.postponeWithinDay(item.task, among: tasks, minutes: 30, now: now)
+                log("Postponed", item.task.title, "Moved later among tasks scheduled for the same day.")
+                presentGrace(for: item.task, trigger: .postponed, revisedStart: revisedStart(for: item.task))
+            },
+            onGrace: (item.risk == .high || item.risk == .critical) ? { presentGrace(for: item.task, trigger: graceTrigger(for: item)) } : nil,
+            onDelete: {
+                log("Deleted", item.task.title, "Task deleted after confirmation.")
+                context.delete(item.task)
+            }
+        )
+        .opacity(deferred ? 0.62 : 1)
+    }
+
     private func log(_ action: String, _ task: String, _ detail: String) { context.insert(ActivityEvent(action: action, taskTitle: task, detail: detail)) }
 
+    private func markTaskComplete(_ task: KairosTask, detail: String) {
+        task.status = .complete
+        log("Completed", task.title, detail)
+        HabitTracker.handleCompletion(task, in: context, existingTasks: tasks)
+    }
+
     private func startFocus(_ task: KairosTask, detail: String) {
+        FocusSessionStore.clear()
         restoredFocus = nil
+        focusGeneration = UUID()
         log("Focus started", task.title, detail)
         focusTask = task
     }
@@ -314,6 +423,7 @@ struct ContentView: View {
         next.sessions = surviving
         restoredFocus = next
         FocusSessionStore.save(next)
+        focusGeneration = UUID()
         log("Focus restored", first.title, "Recovered \(surviving.count) in-progress session(s) after Kairos relaunched.")
         focusTask = first
     }
@@ -337,6 +447,7 @@ struct ContentView: View {
         let candidate = tasks
             .filter { task in
                 guard task.status != .complete, let deadline = task.deadline else { return false }
+                if timeBudget.isShort, task.id != timeBudget.pick?.task.id { return false }
                 return deadline.timeIntervalSinceNow <= 30 * 60
             }
             .sorted { ($0.deadline ?? .distantFuture) < ($1.deadline ?? .distantFuture) }
@@ -353,6 +464,7 @@ struct ContentView: View {
         let candidate = tasks
             .filter { task in
                 guard task.status != .complete, let start = task.scheduledStart else { return false }
+                if timeBudget.isShort, task.id != timeBudget.pick?.task.id { return false }
                 guard start <= current, current.timeIntervalSince(start) <= 24 * 60 * 60 else { return false }
                 return !UserDefaults.standard.bool(forKey: startReminderDismissalKey(for: task))
             }
@@ -425,8 +537,7 @@ struct ContentView: View {
     }
 
     private func complete(_ task: KairosTask) {
-        task.status = .complete
-        log("Completed", task.title, "Task ended from the Kairos recommendation.")
+        markTaskComplete(task, detail: "Task ended from the Kairos recommendation.")
     }
 
     private func applyAgentProposal(_ proposal: KairosAgentProposal) {
@@ -442,7 +553,9 @@ struct ContentView: View {
             if operation.isPrimaryCountdown {
                 for existing in tasks { existing.isPrimaryCountdown = false }
             }
-            let task = KairosTask(title: title, deadline: operation.deadline, estimatedMinutes: operation.value ?? 30, priority: 3, cognitiveLoad: .medium, deadlineType: operation.deadline == nil ? .none : .soft, isPrimaryCountdown: operation.isPrimaryCountdown)
+            let guessed = TaskContextGuess.place(from: title)
+            let load = TaskContextGuess.cognitiveLoad(from: title)
+            let task = KairosTask(title: title, deadline: operation.deadline, estimatedMinutes: operation.value ?? 30, priority: 3, cognitiveLoad: load, deadlineType: operation.deadline == nil ? .none : .soft, isPrimaryCountdown: operation.isPrimaryCountdown, place: guessed)
             context.insert(task); log("Kairos added task", title, explanation)
         case .postpone:
             guard let task = tasks.first(where: { $0.id == operation.taskID }) else { return }
@@ -457,7 +570,10 @@ struct ContentView: View {
             task.priority = operation.value ?? task.priority; log("Kairos changed priority", task.title, explanation)
         case .complete:
             guard let task = tasks.first(where: { $0.id == operation.taskID }) else { return }
-            task.status = .complete; log("Kairos completed", task.title, explanation)
+            markTaskComplete(task, detail: explanation)
+        case .startFocus:
+            guard let task = tasks.first(where: { $0.id == operation.taskID }) else { return }
+            startFocus(task, detail: explanation)
         case .replan, .none: break
         }
     }
@@ -677,6 +793,71 @@ private struct StartTaskReminderView: View {
     }
 }
 
+private struct ContextStatusCapsule: View {
+    let presence: PlacePresence
+    let mode: UserContextMode
+    let weatherSummary: String
+    let weatherSymbol: String
+    let onSelect: (UserContextMode) -> Void
+    let onOpenHomeSettings: () -> Void
+
+    private var sceneTitle: String {
+        switch presence {
+        case .atHome: "在家"
+        case .away: "外出"
+        case .unknown: mode == .auto ? "自动" : mode.menuTitle
+        }
+    }
+
+    var body: some View {
+        Menu {
+            Picker("情境", selection: Binding(
+                get: { mode },
+                set: onSelect
+            )) {
+                Label("在家", systemImage: "house.fill").tag(UserContextMode.home)
+                Label("外出", systemImage: "location.fill").tag(UserContextMode.away)
+            }
+            Divider()
+            Button {
+                onSelect(.auto)
+            } label: {
+                Label("自动跟随定位", systemImage: "sparkles")
+            }
+            if HomeLocation.stored == nil {
+                Button(action: onOpenHomeSettings) {
+                    Label("设置家庭地址", systemImage: "house.badge.plus")
+                }
+            }
+        } label: {
+            VStack(alignment: .leading, spacing: 1) {
+                HStack(alignment: .firstTextBaseline, spacing: 4) {
+                    Text(sceneTitle)
+                        .font(.headline.weight(.bold))
+                    Image(systemName: "chevron.down")
+                        .font(.system(size: 9, weight: .bold))
+                        .foregroundStyle(Color.kairosIndigo.opacity(0.55))
+                }
+                HStack(spacing: 4) {
+                    Image(systemName: weatherSymbol)
+                        .font(.caption)
+                        .symbolRenderingMode(.multicolor)
+                    Text(weatherSummary.isEmpty ? weatherFallback : weatherSummary)
+                        .font(.caption.weight(.medium))
+                        .lineLimit(1)
+                }
+            }
+            .foregroundStyle(Color.kairosIndigo.opacity(0.82))
+            .frame(maxWidth: 180, alignment: .leading)
+        }
+        .menuOrder(.fixed)
+        .accessibilityLabel("当前情境\(sceneTitle)\(weatherSummary.isEmpty ? "" : "，\(weatherSummary)")")
+        .accessibilityHint("切换在家或外出")
+    }
+
+    private var weatherFallback: String { "天气" }
+}
+
 private struct DeadlineDayCountdown: View {
     let task: KairosTask
     let now: Date
@@ -738,43 +919,74 @@ private struct TaskCard: View {
     let item: PlannedTask
     let isNext: Bool
     let accent: Color
+    @Binding var swipedTaskID: UUID?
+    var placeNote: String = TaskPlace.anywhere.displayName
+    var isDeferred = false
     let onFocus: () -> Void
     let onComplete: () -> Void
     let onPostpone: () -> Void
     let onGrace: (() -> Void)?
     let onDelete: () -> Void
-    @State private var horizontalOffset: CGFloat = 0
-    @GestureState private var dragTranslation: CGFloat = 0
+
+    @State private var offset: CGFloat = 0
+    @State private var startOffset: CGFloat = 0
+    @State private var axis: Axis?
     @State private var confirmingDelete = false
 
+    private let actionWidth: CGFloat = 80
+    private let snap = Animation.interpolatingSpring(stiffness: 420, damping: 36)
     var riskColor: Color { switch item.risk { case .safe: .kairosGreen; case .warning: .kairosSun; case .high: .kairosCoral; case .critical: .red } }
-    private var revealDistance: CGFloat { -max(-92, min(0, horizontalOffset + dragTranslation)) }
-    private var deleteRevealProgress: CGFloat { min(1, revealDistance / 64) }
+    private var revealed: CGFloat { max(0, -offset) }
 
     var body: some View {
         ZStack(alignment: .trailing) {
             Button(role: .destructive) { confirmingDelete = true } label: {
-                VStack(spacing: 7) {
+                VStack(spacing: 6) {
                     Image(systemName: "trash.fill")
-                    Text("删除").font(.caption.bold())
+                    Text("删除").font(.footnote.weight(.semibold))
                 }
                 .foregroundStyle(.white)
-                .frame(width: 92)
+                .frame(width: max(actionWidth, revealed))
                 .frame(maxHeight: .infinity)
-                .opacity(deleteRevealProgress)
-                .scaleEffect(0.88 + deleteRevealProgress * 0.12)
+                .background(Color.red)
             }
             .buttonStyle(.plain)
-            .background(Color.red.gradient)
-            .offset(x: 92 - revealDistance)
-            .allowsHitTesting(revealDistance > 40)
+            .accessibilityLabel("删除\(item.task.title)")
 
-            HStack(spacing: 0) {
-              RoundedRectangle(cornerRadius: 4).fill(accent).frame(width: 6)
-              VStack(alignment: .leading, spacing: 14) {
+            cardContent
+                .offset(x: offset)
+                .simultaneousGesture(swipeGesture)
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(accent.opacity(0.18)))
+        .shadow(color: accent.opacity(offset == 0 ? 0.10 : 0.04), radius: offset == 0 ? 14 : 4, y: offset == 0 ? 6 : 1)
+        .onChange(of: swipedTaskID) { _, id in
+            guard id != item.id, offset != 0 else { return }
+            withAnimation(snap) { offset = 0 }
+        }
+        .alert("删除任务？", isPresented: $confirmingDelete) {
+            Button("取消", role: .cancel) { close() }
+            Button("删除", role: .destructive, action: onDelete)
+        } message: {
+            Text("“\(item.task.title)”删除后无法恢复。")
+        }
+    }
+
+    private var cardContent: some View {
+        HStack(spacing: 0) {
+            RoundedRectangle(cornerRadius: 4).fill(accent).frame(width: 6)
+            VStack(alignment: .leading, spacing: 14) {
                 HStack(alignment: .top) {
-                    VStack(alignment: .leading, spacing: 5) { if isNext { Text("接下来做这个").font(.caption2.bold()).tracking(1.2).foregroundStyle(Color.kairosIndigo) }; Text(item.task.title).font(.title3.bold()); if !item.task.goal.isEmpty { Text(item.task.goal).font(.subheadline).foregroundStyle(.secondary) } }
-                    Spacer(); Text(item.risk.displayName).font(.caption2.bold()).padding(.horizontal, 9).padding(.vertical, 5).foregroundStyle(riskColor).background(riskColor.opacity(0.1), in: Capsule())
+                    VStack(alignment: .leading, spacing: 5) {
+                        if isNext { Text("接下来做这个").font(.caption2.bold()).tracking(1.2).foregroundStyle(Color.kairosIndigo) }
+                        Text(item.task.title).font(.title3.bold())
+                        if !item.task.goal.isEmpty { Text(item.task.goal).font(.subheadline).foregroundStyle(.secondary) }
+                        Label(placeNote, systemImage: item.task.place.icon)
+                            .font(.caption2.weight(.semibold))
+                            .foregroundStyle(isDeferred ? Color.kairosCoral : Color.kairosIndigo.opacity(0.8))
+                    }
+                    Spacer()
+                    Text(item.risk.displayName).font(.caption2.bold()).padding(.horizontal, 9).padding(.vertical, 5).foregroundStyle(riskColor).background(riskColor.opacity(0.1), in: Capsule())
                 }
                 HStack {
                     Label("\(item.task.estimatedMinutes) 分钟", systemImage: "timer")
@@ -787,38 +999,76 @@ private struct TaskCard: View {
                 }
                 .font(.caption)
                 .foregroundStyle(.secondary)
-                HStack { Button("开始专注", action: onFocus).buttonStyle(.borderedProminent); Menu { Button("顺延一项", action: onPostpone); if let onGrace { Button("体面说明", action: onGrace) }; Button("标记完成", action: onComplete) } label: { Image(systemName: "ellipsis.circle").font(.title2) }; Spacer(); NavigationLink { TaskEditor(task: item.task) } label: { Text("编辑").font(.subheadline.bold()) } }
-              }.padding(18)
-            }
-            .frame(maxWidth: .infinity)
-            .background(LinearGradient(colors: [.white, accent.opacity(0.07)], startPoint: .leading, endPoint: .trailing))
-            .offset(x: -revealDistance)
-            .simultaneousGesture(
-                DragGesture(minimumDistance: 18)
-                    .updating($dragTranslation) { value, state, _ in
-                        guard abs(value.translation.width) > abs(value.translation.height) else { return }
-                        state = value.translation.width
-                    }
-                    .onEnded { value in
-                        guard abs(value.translation.width) > abs(value.translation.height) else { return }
-                        let projected = horizontalOffset + value.predictedEndTranslation.width
-                        withAnimation(.spring(response: 0.34, dampingFraction: 0.86)) {
-                            horizontalOffset = projected < -45 ? -92 : 0
-                        }
-                    }
-            )
+                HStack {
+                    Button("开始专注", action: onFocus).buttonStyle(.borderedProminent)
+                    Menu {
+                        Button("顺延一项", action: onPostpone)
+                        if let onGrace { Button("体面说明", action: onGrace) }
+                        Button("标记完成", action: onComplete)
+                    } label: { Image(systemName: "ellipsis.circle").font(.title2) }
+                    Spacer()
+                    NavigationLink { TaskEditor(task: item.task) } label: { Text("编辑").font(.subheadline.bold()) }
+                }
+            }.padding(18)
         }
-        .frame(maxWidth: .infinity)
-        .clipShape(RoundedRectangle(cornerRadius: 9))
-        .overlay(RoundedRectangle(cornerRadius: 9).stroke(accent.opacity(0.18)))
-        .shadow(color: accent.opacity(0.10), radius: 14, y: 6)
-        .alert("删除任务？", isPresented: $confirmingDelete) {
-            Button("取消", role: .cancel) {
-                withAnimation(.spring(response: 0.34, dampingFraction: 0.86)) { horizontalOffset = 0 }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.white.overlay(accent.opacity(0.07)))
+        .overlay {
+            if offset != 0 {
+                Color.clear
+                    .contentShape(Rectangle())
+                    .onTapGesture { close() }
             }
-            Button("删除", role: .destructive, action: onDelete)
-        } message: {
-            Text("“\(item.task.title)”删除后无法恢复。")
         }
+    }
+
+    private var swipeGesture: some Gesture {
+        DragGesture(minimumDistance: 12, coordinateSpace: .local)
+            .onChanged { value in
+                let dx = value.translation.width
+                let dy = value.translation.height
+                if axis == nil {
+                    guard abs(dx) > 8 || abs(dy) > 8 else { return }
+                    axis = abs(dx) > abs(dy) ? .horizontal : .vertical
+                    if axis == .horizontal {
+                        startOffset = offset
+                        swipedTaskID = item.id
+                    }
+                }
+                guard axis == .horizontal else { return }
+                var transaction = Transaction()
+                transaction.disablesAnimations = true
+                withTransaction(transaction) {
+                    offset = rubberBand(startOffset + dx)
+                }
+            }
+            .onEnded { value in
+                let wasHorizontal = axis == .horizontal
+                axis = nil
+                guard wasHorizontal else { return }
+                let predicted = startOffset + value.predictedEndTranslation.width
+                let shouldOpen = predicted < -actionWidth * 0.45
+                withAnimation(snap) {
+                    offset = shouldOpen ? -actionWidth : 0
+                }
+                if shouldOpen {
+                    swipedTaskID = item.id
+                    UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                } else if swipedTaskID == item.id {
+                    swipedTaskID = nil
+                }
+            }
+    }
+
+    private func rubberBand(_ proposed: CGFloat) -> CGFloat {
+        if proposed > 0 { return proposed * 0.18 }
+        let overflow = -proposed - actionWidth
+        if overflow > 0 { return -(actionWidth + overflow * 0.28) }
+        return proposed
+    }
+
+    private func close() {
+        withAnimation(snap) { offset = 0 }
+        if swipedTaskID == item.id { swipedTaskID = nil }
     }
 }

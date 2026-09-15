@@ -20,6 +20,10 @@ struct TaskEditor: View {
     @State private var interruptible = true
     @State private var isPrimaryCountdown = false
     @State private var calibrationChoice = TimeBiasCalibrationChoice.automatic
+    @State private var repeatsDaily = false
+    @State private var repeatTime = Calendar.current.date(bySettingHour: 7, minute: 0, second: 0, of: .now) ?? .now
+    @State private var place = TaskPlace.anywhere
+    @State private var placeManuallySet = false
 
     var body: some View {
         Form {
@@ -66,6 +70,29 @@ struct TaskEditor: View {
                     Picker("认知负荷", selection: $load) { ForEach(CognitiveLoad.allCases, id: \.self) { Text($0.displayName).tag($0) } }
                     Toggle("可被打断", isOn: $interruptible)
                 }
+                Section("在哪做") {
+                    Picker("场景", selection: Binding(
+                        get: { place },
+                        set: { place = $0; placeManuallySet = true }
+                    )) {
+                        ForEach(TaskPlace.allCases, id: \.self) { option in
+                            Text(option.displayName).tag(option)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    Text("在家如洗衣；出门如采购。随地表示随时都能做。硬截止不会因为你人在家就被藏掉。")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Section("重复与习惯") {
+                    Toggle("每天重复", isOn: $repeatsDaily)
+                    if repeatsDaily {
+                        DatePicker("每天这个时间", selection: $repeatTime, displayedComponents: .hourAndMinute)
+                        Text("完成后会记入习惯。哪天断了，连续天数归零，并保留最高连续记录。")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
         }
         .navigationTitle(task == nil ? "新建任务" : "编辑任务")
         .navigationBarTitleDisplayMode(.inline)
@@ -83,6 +110,17 @@ struct TaskEditor: View {
             deadlineType = task.deadlineType; interruptible = task.isInterruptible
             isPrimaryCountdown = task.isPrimaryCountdown
             calibrationChoice = task.timeBiasCalibration
+            repeatsDaily = task.repeatsDaily
+            repeatTime = HabitTracker.applyingRepeatTime(.now, hour: task.repeatHour, minute: task.repeatMinute)
+            place = task.place
+            placeManuallySet = true
+        }
+        .onChange(of: title) { _, newTitle in
+            guard task == nil, !placeManuallySet else { return }
+            let guessedPlace = TaskContextGuess.place(from: newTitle)
+            let guessedLoad = TaskContextGuess.cognitiveLoad(from: newTitle)
+            if guessedPlace != .anywhere { place = guessedPlace }
+            if guessedLoad != .medium { load = guessedLoad }
         }
     }
 
@@ -97,17 +135,36 @@ struct TaskEditor: View {
         if hasDeadline && isPrimaryCountdown {
             for existing in allTasks where existing.id != task?.id { existing.isPrimaryCountdown = false }
         }
+        let hour = Calendar.current.component(.hour, from: repeatTime)
+        let minute = Calendar.current.component(.minute, from: repeatTime)
+        let nextStart: Date? = {
+            guard repeatsDaily else { return hasScheduledStart ? scheduledStart : nil }
+            if hasScheduledStart {
+                return HabitTracker.applyingRepeatTime(scheduledStart, hour: hour, minute: minute)
+            }
+            return HabitTracker.nextOccurrence(hour: hour, minute: minute, after: .now)
+        }()
         if let task {
             task.title = title; task.goal = goal; task.deadline = hasDeadline ? deadline : nil; task.estimatedMinutes = minutes
-            task.scheduledStart = hasScheduledStart ? scheduledStart : nil
+            task.scheduledStart = nextStart
             task.priority = priority; task.cognitiveLoad = load; task.deadlineType = hasDeadline ? deadlineType : .none; task.isInterruptible = interruptible
             task.isPrimaryCountdown = hasDeadline && isPrimaryCountdown
             task.timeBiasCalibration = calibrationChoice
+            task.repeatsDaily = repeatsDaily
+            task.repeatHour = hour
+            task.repeatMinute = minute
+            task.place = place
+            if repeatsDaily {
+                HabitTracker.ensureRoutine(for: task, in: context)
+            }
         } else {
-            let created = KairosTask(title: title, goal: goal, deadline: hasDeadline ? deadline : nil, scheduledStart: hasScheduledStart ? scheduledStart : nil, estimatedMinutes: minutes, priority: priority, cognitiveLoad: load, isInterruptible: interruptible, deadlineType: hasDeadline ? deadlineType : .none, isPrimaryCountdown: hasDeadline && isPrimaryCountdown)
+            let created = KairosTask(title: title, goal: goal, deadline: hasDeadline ? deadline : nil, scheduledStart: nextStart, estimatedMinutes: minutes, priority: priority, cognitiveLoad: load, isInterruptible: interruptible, deadlineType: hasDeadline ? deadlineType : .none, isPrimaryCountdown: hasDeadline && isPrimaryCountdown, repeatsDaily: repeatsDaily, repeatHour: hour, repeatMinute: minute, place: place)
             created.timeBiasCalibration = calibrationChoice
             context.insert(created)
             context.insert(ActivityEvent(action: "Task created", taskTitle: title, detail: "Estimated at \(minutes) minutes."))
+            if repeatsDaily {
+                HabitTracker.ensureRoutine(for: created, in: context)
+            }
         }
         dismiss()
     }
@@ -167,6 +224,7 @@ struct HabitsView: View {
             }
         }
         .sheet(isPresented: $showingNewHabit) { NewHabitView() }
+        .onAppear { HabitTracker.refreshBrokenStreaks(in: context) }
     }
 
     private func habitCard(_ routine: Routine, accent: Color) -> some View {
@@ -199,9 +257,14 @@ struct HabitsView: View {
                     .font(.subheadline.weight(.semibold))
                     .foregroundStyle(.secondary)
                 Spacer()
-                Label(routine.isDoneToday ? "今天已完成" : "今天待完成", systemImage: routine.isDoneToday ? "checkmark.circle.fill" : "circle")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(routine.isDoneToday ? accent : .secondary)
+                VStack(alignment: .trailing, spacing: 4) {
+                    Label(routine.isDoneToday ? "今天已完成" : "今天待完成", systemImage: routine.isDoneToday ? "checkmark.circle.fill" : "circle")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(routine.isDoneToday ? accent : .secondary)
+                    Text("最高 \(routine.bestStreak) 天")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                }
             }
 
             Button {
@@ -221,14 +284,8 @@ struct HabitsView: View {
 
     private func completeToday(_ routine: Routine) {
         guard !routine.isDoneToday else { return }
-        let calendar = Calendar.current
-        if let lastCompletedDay = routine.lastCompletedDay, calendar.isDateInYesterday(lastCompletedDay) {
-            routine.streak += 1
-        } else {
-            routine.streak = 1
-        }
-        routine.lastCompletedDay = .now
-        context.insert(ActivityEvent(action: "Routine completed", taskTitle: routine.title, detail: "\(routine.streak) day streak protected."))
+        HabitTracker.recordCheckIn(routine)
+        context.insert(ActivityEvent(action: "Routine completed", taskTitle: routine.title, detail: "\(routine.streak) day streak protected. Best \(routine.bestStreak)."))
     }
 }
 

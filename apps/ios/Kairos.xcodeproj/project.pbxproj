@@ -34,6 +34,12 @@
 		A33100000000000000000003 /* LiveActivityManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A33000000000000000000002 /* LiveActivityManager.swift */; };
 		A33100000000000000000004 /* KairosLiveActivity.swift in Sources */ = {isa = PBXBuildFile; fileRef = A33000000000000000000003 /* KairosLiveActivity.swift */; };
 		A33100000000000000000005 /* LiveActivityManagerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A33000000000000000000004 /* LiveActivityManagerTests.swift */; };
+		A3800000000000000000000B /* TimeBudgetTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3800000000000000000000C /* TimeBudgetTests.swift */; };
+		A38000000000000000000009 /* PlaceContextTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3800000000000000000000A /* PlaceContextTests.swift */; };
+		A38000000000000000000007 /* HabitTrackerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A38000000000000000000008 /* HabitTrackerTests.swift */; };
+		A38000000000000000000005 /* TimeBudget.swift in Sources */ = {isa = PBXBuildFile; fileRef = A38000000000000000000006 /* TimeBudget.swift */; };
+		A38000000000000000000003 /* PlaceContext.swift in Sources */ = {isa = PBXBuildFile; fileRef = A38000000000000000000004 /* PlaceContext.swift */; };
+		A38000000000000000000001 /* HabitTracker.swift in Sources */ = {isa = PBXBuildFile; fileRef = A38000000000000000000002 /* HabitTracker.swift */; };
 		AE3A0CAA160DF285B05606C3 /* KairosAdvisorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AE15228B5AE403513B611B2F /* KairosAdvisorTests.swift */; };
 		B10000000000000000000001 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = B20000000000000000000001 /* Assets.xcassets */; };
 		BA98A6373794C0B184CC2A64 /* Models.swift in Sources */ = {isa = PBXBuildFile; fileRef = F272DE13CF2A640D9292FDF1 /* Models.swift */; };
@@ -93,6 +99,12 @@
 		A33000000000000000000002 /* LiveActivityManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiveActivityManager.swift; sourceTree = "<group>"; };
 		A33000000000000000000003 /* KairosLiveActivity.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KairosLiveActivity.swift; sourceTree = "<group>"; };
 		A33000000000000000000004 /* LiveActivityManagerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiveActivityManagerTests.swift; sourceTree = "<group>"; };
+		A3800000000000000000000C /* TimeBudgetTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TimeBudgetTests.swift; sourceTree = "<group>"; };
+		A3800000000000000000000A /* PlaceContextTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlaceContextTests.swift; sourceTree = "<group>"; };
+		A38000000000000000000008 /* HabitTrackerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HabitTrackerTests.swift; sourceTree = "<group>"; };
+		A38000000000000000000006 /* TimeBudget.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TimeBudget.swift; sourceTree = "<group>"; };
+		A38000000000000000000004 /* PlaceContext.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlaceContext.swift; sourceTree = "<group>"; };
+		A38000000000000000000002 /* HabitTracker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HabitTracker.swift; sourceTree = "<group>"; };
 		4433755522A4A7E404DDD25E /* TaskEditor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TaskEditor.swift; sourceTree = "<group>"; };
 		4D2465E4BB7D301FB75862B3 /* KairosTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = KairosTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		5917DADFEC619905CF8CE9E2 /* KeychainStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeychainStore.swift; sourceTree = "<group>"; };
@@ -160,6 +172,9 @@
 				A31000000000000000000003 /* TimeBiasReflectorTests.swift */,
 				A32000000000000000000003 /* GraceMessageGeneratorTests.swift */,
 				A33000000000000000000004 /* LiveActivityManagerTests.swift */,
+				A3800000000000000000000C /* TimeBudgetTests.swift */,
+				A3800000000000000000000A /* PlaceContextTests.swift */,
+				A38000000000000000000008 /* HabitTrackerTests.swift */,
 				A35000000000000000000003 /* FocusSessionStoreTests.swift */,
 			);
 			path = KairosTests;
@@ -187,6 +202,9 @@
 				FE17DCBAC8F0F2096B76DCC3 /* DayReviewView.swift */,
 				9FD68A692FD2FEFC7252F421 /* FocusView.swift */,
 				A33000000000000000000002 /* LiveActivityManager.swift */,
+				A38000000000000000000006 /* TimeBudget.swift */,
+				A38000000000000000000004 /* PlaceContext.swift */,
+				A38000000000000000000002 /* HabitTracker.swift */,
 				F8589904AE116A9AB6BF516B /* Info.plist */,
 				DCBC7550CDDE6CA8CDE08B45 /* KairosAdvisor.swift */,
 				2A14FA8751B5398FB9D69F9B /* KairosApp.swift */,
@@ -336,6 +354,9 @@
 				29CA7E23A8872731A75F0165 /* FocusView.swift in Sources */,
 				A33100000000000000000001 /* KairosFocusAttributes.swift in Sources */,
 				A33100000000000000000003 /* LiveActivityManager.swift in Sources */,
+				A38000000000000000000005 /* TimeBudget.swift in Sources */,
+				A38000000000000000000003 /* PlaceContext.swift in Sources */,
+				A38000000000000000000001 /* HabitTracker.swift in Sources */,
 				970A30E82811D76CD17DC004 /* KairosAdvisor.swift in Sources */,
 				6E5758309D31F5AFF889DB9F /* KairosApp.swift in Sources */,
 				CFE6452FAB5E2B5D88CC754C /* KairosSettingsView.swift in Sources */,
@@ -365,6 +386,9 @@
 				A31000000000000000000004 /* TimeBiasReflectorTests.swift in Sources */,
 				A32000000000000000000004 /* GraceMessageGeneratorTests.swift in Sources */,
 				A33100000000000000000005 /* LiveActivityManagerTests.swift in Sources */,
+				A3800000000000000000000B /* TimeBudgetTests.swift in Sources */,
+				A38000000000000000000009 /* PlaceContextTests.swift in Sources */,
+				A38000000000000000000007 /* HabitTrackerTests.swift in Sources */,
 				A35000000000000000000004 /* FocusSessionStoreTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;

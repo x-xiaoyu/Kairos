@@ -7,6 +7,7 @@ enum KairosAgentAction: Equatable {
     case changePriority
     case complete
     case replan
+    case startFocus
     case none
 }
 
@@ -67,7 +68,13 @@ struct KairosRecommendation {
     let headline: String
     let reason: String
     let consequence: String
+    let confirmPrompt: String
+    let primaryActionTitle: String
+    let secondaryActionTitle: String
     let urgency: RiskLevel
+    let pickID: UUID?
+    let isTimeShort: Bool
+    let confirmToken: String
 }
 
 enum NudgeStage: String, Equatable, Sendable {
@@ -106,33 +113,94 @@ struct KairosAgentNudge: Equatable, Sendable {
 }
 
 enum KairosAdvisor {
-    static func recommendation(for plan: [PlannedTask], now: Date = .now) -> KairosRecommendation? {
-        guard let next = plan.first else { return nil }
+    static func recommendation(for plan: [PlannedTask], presence: PlacePresence = .unknown, now: Date = .now, calendar: Calendar = .current) -> KairosRecommendation? {
+        let budget = TimeBudget.evaluate(plan: plan, now: now, presence: presence, calendar: calendar)
+        guard let next = budget.pick else { return nil }
+        if budget.isShort {
+            return timeShortRecommendation(pick: next, budget: budget)
+        }
         let safeBy = next.latestSafeStart?.formatted(date: .omitted, time: .shortened)
+        let placeNote: String?
+        switch presence {
+        case .atHome where next.task.place == .outing:
+            placeNote = "虽然这件要出门，但已经很紧迫，不能因为人在家就先放下。"
+        case .away where next.task.place == .home:
+            placeNote = "虽然这件通常在家做，但已经很紧迫。"
+        case .atHome:
+            placeNote = plan.contains(where: { $0.task.place == .outing && !PlaceContext.isPinnedByUrgency($0.risk) })
+                ? "出门类任务先放着；现在适合做在家就能完成的事。"
+                : nil
+        case .away:
+            placeNote = plan.contains(where: { $0.task.place == .home && !PlaceContext.isPinnedByUrgency($0.risk) })
+                ? "回家再做家务类任务；现在优先能在外面完成的。"
+                : nil
+        case .unknown:
+            placeNote = nil
+        }
         let reason: String
         switch next.risk {
-        case .critical: reason = "安全开始时间已经过去。现在开始，可以尽量保住今天剩余的安排。"
-        case .high: reason = "已经接近最晚安全开始时间\(safeBy.map { "（\($0)）" } ?? "")。"
-        case .warning: reason = "在 \(safeBy ?? "安全开始时间") 前开始，后面的安排仍有调整空间。"
-        case .safe: reason = "综合优先级、截止时间和所需时长，这是现在最合适的一步。"
+        case .critical: reason = [placeNote, "安全开始时间已经过去。现在开始，可以尽量保住今天剩余的安排。"].compactMap { $0 }.joined(separator: " ")
+        case .high: reason = [placeNote, "已经接近最晚安全开始时间\(safeBy.map { "（\($0)）" } ?? "")。"].compactMap { $0 }.joined(separator: " ")
+        case .warning: reason = [placeNote, "在 \(safeBy ?? "安全开始时间") 前开始，后面的安排仍有调整空间。"].compactMap { $0 }.joined(separator: " ")
+        case .safe: reason = [placeNote, "综合优先级、截止时间、所需时长和你现在的位置，这是现在最合适的一步。"].compactMap { $0 }.joined(separator: " ")
         }
         let consequence: String
-        if plan.count > 1 {
-            let later = plan[1].task.title
-            consequence = "如果推迟 \(next.task.estimatedMinutes) 分钟，“\(later)”也会顺延。"
+        if let later = plan.first(where: { $0.id != next.id }) {
+            consequence = "如果推迟 \(next.task.estimatedMinutes) 分钟，“\(later.task.title)”也会跟着受影响。"
         } else if let deadline = next.task.deadline {
             let remaining = max(0, Int(deadline.timeIntervalSince(now) / 60))
-            consequence = "距离截止时间约有 \(Self.remainingTimeText(minutes: remaining))；继续推迟会减少缓冲时间。"
+            consequence = "距离截止时间约有 \(TimeBudget.remainingTimeText(minutes: remaining))；继续推迟会减少缓冲时间。"
         } else {
             consequence = "现在仍有调整空间，但立即开始可以保留稍后的自由时间。"
         }
-        return KairosRecommendation(eyebrow: next.risk == .safe ? "Kairos 建议" : "安全时间正在缩短", headline: "现在开始“\(next.task.title)”", reason: reason, consequence: consequence, urgency: next.risk)
+        let prefix = presence == .unknown ? "现在开始" : "\(presence.headline)，先做"
+        return KairosRecommendation(
+            eyebrow: next.risk == .safe ? "Kairos 建议" : "安全时间正在缩短",
+            headline: "\(prefix)“\(next.task.title)”",
+            reason: reason,
+            consequence: consequence,
+            confirmPrompt: "",
+            primaryActionTitle: "开始当前任务",
+            secondaryActionTitle: "顺延当前任务",
+            urgency: next.risk,
+            pickID: next.task.id,
+            isTimeShort: false,
+            confirmToken: budget.confirmToken
+        )
     }
 
-    private static func remainingTimeText(minutes: Int) -> String {
-        if minutes >= 24 * 60 { return "\(max(1, minutes / (24 * 60))) 天" }
-        if minutes >= 60 { return "\(max(1, minutes / 60)) 小时" }
-        return "\(minutes) 分钟"
+    private static func timeShortRecommendation(pick: PlannedTask, budget: TimeBudgetSnapshot) -> KairosRecommendation {
+        let remaining = TimeBudget.remainingTimeText(minutes: budget.remainingMinutes)
+        let needed = TimeBudget.remainingTimeText(minutes: budget.neededMinutes)
+        let leftoverNote = pick.task.estimatedMinutes > budget.remainingMinutes && budget.remainingMinutes > 0
+            ? "完整做完可能来不及，先开始最重要的这一项就好。"
+            : "先保住最重要的一项，其余先放下，不代表失败。"
+        return KairosRecommendation(
+            eyebrow: "时间不够一次做完",
+            headline: budget.remainingMinutes == 0
+                ? "今天剩下的时间已经不够，建议先做“\(pick.task.title)”"
+                : "剩下约 \(remaining)，建议先做“\(pick.task.title)”",
+            reason: "今天还有 \(budget.taskCount) 项，大约需要 \(needed)。\(leftoverNote)",
+            consequence: "同时催这 \(budget.taskCount) 项只会更乱。先确认要不要做这一项。",
+            confirmPrompt: "要先做“\(pick.task.title)”吗？",
+            primaryActionTitle: "先做“\(pick.task.title)”",
+            secondaryActionTitle: "稍后再说",
+            urgency: pick.risk == .safe ? .warning : pick.risk,
+            pickID: pick.task.id,
+            isTimeShort: true,
+            confirmToken: budget.confirmToken
+        )
+    }
+
+    static func refineRecommendation(_ recommendation: KairosRecommendation, pick: PlannedTask, budget: TimeBudgetSnapshot) async -> KairosRecommendation {
+        guard recommendation.isTimeShort else { return recommendation }
+        let mode = UserDefaults.standard.string(forKey: "agentMode") ?? "local"
+        guard mode == "personal" else { return recommendation }
+        do {
+            return try await PersonalAIService().refineTimeShortRecommendation(recommendation, pick: pick, budget: budget)
+        } catch {
+            return recommendation
+        }
     }
 
     static func generateLocalNudge(for task: KairosTask, stage: NudgeStage) -> KairosAgentNudge {
@@ -168,6 +236,10 @@ enum KairosAdvisor {
         let taskCount = countedTaskCount(in: lower)
         let isCountedCreation = taskCount > 1 && ["刷", "做", "练", "solve", "finish"].contains(where: lower.contains)
         let isCreation = creationWords.contains(where: lower.contains) || isCountedCreation
+
+        if isPriorityQuestion(lower) {
+            return priorityProposal(tasks: active, now: now)
+        }
 
         if lower.contains("累") || lower.contains("tired") || lower.contains("没状态") || lower.contains("low energy") {
             let lowLoad = active.filter { $0.cognitiveLoad == .low }.sorted { $0.priority > $1.priority }.first
@@ -305,6 +377,38 @@ enum KairosAdvisor {
             return (evening && value < 12 ? value + 12 : value, text.contains("半") ? 30 : 0)
         }
         return nil
+    }
+
+    private static func isPriorityQuestion(_ text: String) -> Bool {
+        let keys = ["该做", "先做哪", "先做什么", "现在做什么", "来得及", "时间不够", "优先做", "哪个最重要", "what should i do", "which first"]
+        return keys.contains(where: text.contains)
+    }
+
+    private static func priorityProposal(tasks: [KairosTask], now: Date) -> KairosAgentProposal {
+        guard !tasks.isEmpty else { return noTaskProposal() }
+        let plan = Planner.makePlan(tasks: tasks, now: now)
+        let budget = TimeBudget.evaluate(plan: plan, now: now)
+        guard let pick = budget.pick else { return noTaskProposal() }
+        if budget.isShort {
+            let remaining = TimeBudget.remainingTimeText(minutes: budget.remainingMinutes)
+            let needed = TimeBudget.remainingTimeText(minutes: budget.neededMinutes)
+            return KairosAgentProposal(
+                action: .startFocus,
+                title: "要先做“\(pick.task.title)”吗？",
+                explanation: "剩下约 \(remaining)，这 \(budget.taskCount) 项大约需要 \(needed)。时间不够一次做完，建议先做最重要的“\(pick.task.title)”。",
+                taskID: pick.task.id,
+                taskTitle: pick.task.title,
+                requiresConfirmation: true
+            )
+        }
+        return KairosAgentProposal(
+            action: .startFocus,
+            title: "现在先做“\(pick.task.title)”？",
+            explanation: "综合截止时间、优先级和所需时长，这是现在最合适的一步。",
+            taskID: pick.task.id,
+            taskTitle: pick.task.title,
+            requiresConfirmation: true
+        )
     }
 
     private static func noTaskProposal() -> KairosAgentProposal {

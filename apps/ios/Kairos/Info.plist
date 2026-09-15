@@ -32,7 +32,7 @@
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Kairos connects to your local Agent service during development.</string>
 	<key>NSLocationWhenInUseUsageDescription</key>
-	<string>Kairos uses your approximate location to show current local weather.</string>
+	<string>Kairos uses your location to show local weather and to tell which tasks you can do at home versus while you are out.</string>
 	<key>NSSupportsLiveActivities</key>
 	<true/>
 	<key>UIApplicationSupportsIndirectInputEvents</key>
@@ -42,9 +42,6 @@
 	<key>UISupportedInterfaceOrientations</key>
 	<array>
 		<string>UIInterfaceOrientationPortrait</string>
-		<string>UIInterfaceOrientationLandscapeLeft</string>
-		<string>UIInterfaceOrientationLandscapeRight</string>
-		<string>UIInterfaceOrientationPortraitUpsideDown</string>
 	</array>
 </dict>
 </plist>

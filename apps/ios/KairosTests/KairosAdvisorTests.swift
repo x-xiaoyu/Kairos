@@ -164,4 +164,51 @@ final class KairosAdvisorTests: XCTestCase {
         XCTAssertEqual(merged.microStep, "打开页面，写下“周报”两个字")
         XCTAssertEqual(merged.stage, .start)
     }
+
+    @MainActor
+    func testTimeShortRecommendationAsksToConfirmSinglePriority() {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        let now = calendar.date(from: DateComponents(year: 2026, month: 9, day: 15, hour: 22, minute: 0))!
+        let deadline = calendar.date(from: DateComponents(year: 2026, month: 9, day: 15, hour: 23, minute: 0))!
+        let laundry = KairosTask(title: "洗衣服", deadline: deadline, estimatedMinutes: 30, priority: 2, cognitiveLoad: .low)
+        laundry.createdAt = now
+        let interview = KairosTask(title: "准备面试", deadline: deadline, estimatedMinutes: 30, priority: 5, cognitiveLoad: .high)
+        interview.createdAt = now.addingTimeInterval(1)
+        let dishes = KairosTask(title: "洗碗", deadline: deadline, estimatedMinutes: 30, priority: 1, cognitiveLoad: .low)
+        dishes.createdAt = now.addingTimeInterval(2)
+        let shopping = KairosTask(title: "采购", deadline: deadline, estimatedMinutes: 30, priority: 3, cognitiveLoad: .low)
+        shopping.createdAt = now.addingTimeInterval(3)
+        let plan = Planner.makePlan(tasks: [laundry, interview, dishes, shopping], now: now)
+        let recommendation = KairosAdvisor.recommendation(for: plan, presence: .atHome, now: now, calendar: calendar)
+
+        XCTAssertEqual(recommendation?.isTimeShort, true)
+        XCTAssertEqual(recommendation?.pickID, interview.id)
+        XCTAssertTrue(recommendation?.headline.contains("准备面试") == true)
+        XCTAssertTrue(recommendation?.confirmPrompt.contains("准备面试") == true)
+        XCTAssertTrue(recommendation?.primaryActionTitle.contains("准备面试") == true)
+        XCTAssertEqual(recommendation?.secondaryActionTitle, "稍后再说")
+    }
+
+    @MainActor
+    func testPriorityQuestionProposesConfirmedStartFocus() {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        let now = calendar.date(from: DateComponents(year: 2026, month: 9, day: 15, hour: 22, minute: 0))!
+        let deadline = calendar.date(from: DateComponents(year: 2026, month: 9, day: 15, hour: 23, minute: 0))!
+        let a = KairosTask(title: "洗衣", deadline: deadline, estimatedMinutes: 30, priority: 2)
+        a.createdAt = now
+        let b = KairosTask(title: "准备面试", deadline: deadline, estimatedMinutes: 30, priority: 5)
+        b.createdAt = now.addingTimeInterval(1)
+        let c = KairosTask(title: "洗碗", deadline: deadline, estimatedMinutes: 30, priority: 1)
+        c.createdAt = now.addingTimeInterval(2)
+        let d = KairosTask(title: "采购", deadline: deadline, estimatedMinutes: 30, priority: 3)
+        d.createdAt = now.addingTimeInterval(3)
+
+        let result = KairosAdvisor.interpret("时间不够，先做哪个最重要？", tasks: [a, b, c, d], now: now)
+        XCTAssertEqual(result.action, .startFocus)
+        XCTAssertEqual(result.taskTitle, "准备面试")
+        XCTAssertTrue(result.requiresConfirmation)
+        XCTAssertTrue(result.explanation.contains("时间不够") || result.explanation.contains("剩下"))
+    }
 }

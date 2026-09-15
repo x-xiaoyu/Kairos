@@ -195,6 +195,7 @@ struct AgentActionDTO: Decodable {
         case "change_priority": .changePriority
         case "complete_task": .complete
         case "replan": .replan
+        case "start_focus": .startFocus
         default: .none
         }
     }

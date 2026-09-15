@@ -29,6 +29,24 @@ enum DeadlineType: String, Codable, CaseIterable {
     }
 }
 
+enum TaskPlace: String, Codable, CaseIterable {
+    case anywhere, home, outing
+    var displayName: String {
+        switch self {
+        case .anywhere: "随地"
+        case .home: "在家"
+        case .outing: "出门"
+        }
+    }
+    var icon: String {
+        switch self {
+        case .anywhere: "sparkles"
+        case .home: "house.fill"
+        case .outing: "figure.walk"
+        }
+    }
+}
+
 @Model
 final class KairosTask {
     @Attribute(.unique) var id: UUID
@@ -49,18 +67,55 @@ final class KairosTask {
     var dayOrder: Int = 0
     var isPrimaryCountdown: Bool = false
     var timeBiasCalibrationRaw: String = TimeBiasCalibrationChoice.automatic.rawValue
+    var repeatsDaily: Bool = false
+    var repeatHour: Int = 7
+    var repeatMinute: Int = 0
+    var linkedRoutineID: UUID? = nil
+    var placeRaw: String = TaskPlace.anywhere.rawValue
 
-    init(title: String, goal: String = "", deadline: Date? = nil, scheduledStart: Date? = nil, estimatedMinutes: Int = 30, priority: Int = 3, status: TaskStatus = .todo, cognitiveLoad: CognitiveLoad = .medium, isInterruptible: Bool = true, deadlineType: DeadlineType = .soft, isPrimaryCountdown: Bool = false) {
+    init(title: String, goal: String = "", deadline: Date? = nil, scheduledStart: Date? = nil, estimatedMinutes: Int = 30, priority: Int = 3, status: TaskStatus = .todo, cognitiveLoad: CognitiveLoad = .medium, isInterruptible: Bool = true, deadlineType: DeadlineType = .soft, isPrimaryCountdown: Bool = false, repeatsDaily: Bool = false, repeatHour: Int = 7, repeatMinute: Int = 0, linkedRoutineID: UUID? = nil, place: TaskPlace = .anywhere) {
         id = UUID(); self.title = title; self.goal = goal; self.deadline = deadline
         self.estimatedMinutes = estimatedMinutes; self.priority = priority; statusRaw = status.rawValue
         cognitiveLoadRaw = cognitiveLoad.rawValue; self.isInterruptible = isInterruptible
         deadlineTypeRaw = deadlineType.rawValue; createdAt = .now; availableAfter = nil; self.scheduledStart = scheduledStart; dayOrder = 0; self.isPrimaryCountdown = isPrimaryCountdown
         timeBiasCalibrationRaw = TimeBiasCalibrationChoice.automatic.rawValue
+        self.repeatsDaily = repeatsDaily
+        self.repeatHour = repeatHour
+        self.repeatMinute = repeatMinute
+        self.linkedRoutineID = linkedRoutineID
+        self.placeRaw = place.rawValue
+    }
+
+    func duplicatedAsTodo(scheduledStart: Date? = nil, keepRepeat: Bool = true) -> KairosTask {
+        let copy = KairosTask(
+            title: title,
+            goal: goal,
+            deadline: nil,
+            scheduledStart: scheduledStart,
+            estimatedMinutes: estimatedMinutes,
+            priority: priority,
+            status: .todo,
+            cognitiveLoad: cognitiveLoad,
+            isInterruptible: isInterruptible,
+            deadlineType: .none,
+            isPrimaryCountdown: false,
+            repeatsDaily: keepRepeat && repeatsDaily,
+            repeatHour: repeatHour,
+            repeatMinute: repeatMinute,
+            linkedRoutineID: keepRepeat ? linkedRoutineID : nil,
+            place: place
+        )
+        copy.timeBiasCalibration = timeBiasCalibration
+        return copy
     }
 
     var status: TaskStatus { get { TaskStatus(rawValue: statusRaw) ?? .todo } set { statusRaw = newValue.rawValue } }
     var cognitiveLoad: CognitiveLoad { get { CognitiveLoad(rawValue: cognitiveLoadRaw) ?? .medium } set { cognitiveLoadRaw = newValue.rawValue } }
     var deadlineType: DeadlineType { get { DeadlineType(rawValue: deadlineTypeRaw) ?? .soft } set { deadlineTypeRaw = newValue.rawValue } }
+    var place: TaskPlace {
+        get { TaskPlace(rawValue: placeRaw) ?? .anywhere }
+        set { placeRaw = newValue.rawValue }
+    }
     var timeBiasCalibration: TimeBiasCalibrationChoice {
         get { TimeBiasCalibrationChoice(rawValue: timeBiasCalibrationRaw) ?? .automatic }
         set { timeBiasCalibrationRaw = newValue.rawValue }
@@ -72,9 +127,16 @@ final class Routine {
     @Attribute(.unique) var id: UUID
     var title: String
     var targetMinutes: Int
-    var streak: Int
+    var streak: Int = 0
+    var bestStreak: Int = 0
     var lastCompletedDay: Date?
-    init(title: String, targetMinutes: Int, streak: Int = 0) { id = UUID(); self.title = title; self.targetMinutes = targetMinutes; self.streak = streak }
+    init(title: String, targetMinutes: Int, streak: Int = 0, bestStreak: Int = 0) {
+        id = UUID()
+        self.title = title
+        self.targetMinutes = targetMinutes
+        self.streak = streak
+        self.bestStreak = max(bestStreak, streak)
+    }
     var isDoneToday: Bool { guard let lastCompletedDay else { return false }; return Calendar.current.isDateInToday(lastCompletedDay) }
 }
 
