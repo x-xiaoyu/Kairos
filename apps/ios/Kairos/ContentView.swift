@@ -81,12 +81,14 @@ struct ContentView: View {
                 )
                 .interactiveDismissDisabled()
             }
-            .fullScreenCover(item: $focusTask) { task in FocusView(task: task, log: { action, detail in log(action, task.title, detail) }, onComplete: { startedAt, endedAt, focusedSeconds in
+            .fullScreenCover(item: $focusTask) { task in FocusView(task: task, availableTasks: tasks, log: { action, focusedTask, detail in
+                log(action, focusedTask.title, detail)
+            }, onComplete: { completedTask, startedAt, endedAt, focusedSeconds in
                 guard saveFocusToCalendar else { return }
                 Task {
-                    let saved = await calendar.saveFocusSession(task: task, startedAt: startedAt, endedAt: endedAt, focusedSeconds: focusedSeconds)
-                    log(saved ? "Added to Calendar" : "Calendar save failed", task.title, saved ? "The completed focus period was saved in the Kairos calendar." : (calendar.lastError ?? "Calendar was unavailable."))
-                    calendarSaveMessage = saved ? "已将“\(task.title)”的专注时段存入 Apple 日历。" : (calendar.lastError ?? "无法写入 Apple 日历。")
+                    let saved = await calendar.saveFocusSession(task: completedTask, startedAt: startedAt, endedAt: endedAt, focusedSeconds: focusedSeconds)
+                    log(saved ? "Added to Calendar" : "Calendar save failed", completedTask.title, saved ? "The completed focus period was saved in the Kairos calendar." : (calendar.lastError ?? "Calendar was unavailable."))
+                    calendarSaveMessage = saved ? "已将“\(completedTask.title)”的专注时段存入 Apple 日历。" : (calendar.lastError ?? "无法写入 Apple 日历。")
                 }
             }) }
             .alert("Apple 日历", isPresented: Binding(get: { calendarSaveMessage != nil }, set: { if !$0 { calendarSaveMessage = nil } })) {

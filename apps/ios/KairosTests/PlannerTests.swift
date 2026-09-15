@@ -3,6 +3,19 @@ import XCTest
 
 @MainActor
 final class PlannerTests: XCTestCase {
+    func testFocusCountdownConsumesElapsedWallClockTime() {
+        let task = KairosTask(title: "Concurrent task", estimatedMinutes: 5)
+        var countdown = FocusCountdown(task: task)
+
+        countdown.consume(90)
+        XCTAssertEqual(countdown.secondsRemaining, 210)
+        XCTAssertEqual(countdown.focusedSeconds, 90)
+
+        countdown.consume(999)
+        XCTAssertEqual(countdown.secondsRemaining, 0)
+        XCTAssertEqual(countdown.focusedSeconds, 300)
+    }
+
     func testLatestSafeStartIncludesHigherPriorityWork() {
         let now = Date(timeIntervalSince1970: 2_000_000_000)
         let deadline = now.addingTimeInterval(4 * 60 * 60)
