@@ -34,22 +34,22 @@ struct KairosSettingsView: View {
                             .font(.caption).foregroundStyle(.secondary)
                     }
                 }
-                Section("Weather") {
-                    Picker("Temperature", selection: $weatherUnit) {
-                        Text("Auto").tag("automatic")
+                Section("天气") {
+                    Picker("温度单位", selection: $weatherUnit) {
+                        Text("跟随系统").tag("automatic")
                         Text("°C").tag("celsius")
                         Text("°F").tag("fahrenheit")
                     }.pickerStyle(.segmented)
-                    Text("Auto follows the measurement system configured on your iPhone.").font(.caption).foregroundStyle(.secondary)
+                    Text("跟随系统会使用 iPhone 的度量单位。").font(.caption).foregroundStyle(.secondary)
                 }
-                Section("Apple Calendar") {
-                    Toggle("Save completed focus sessions", isOn: $saveFocusToCalendar)
+                Section("Apple 日历") {
+                    Toggle("保存完成的专注时段", isOn: $saveFocusToCalendar)
                     Text("开启后，点击“完成任务”会将实际开始和结束时间写入 iPhone 当前默认日历。首次使用时请允许 Kairos 完全访问日历。")
                         .font(.caption).foregroundStyle(.secondary)
                 }
-                Section("Notifications") { Text("Kairos schedules on-device alerts at each task’s Latest Safe Start. Notification permission is managed in the iPhone Settings app.").font(.caption).foregroundStyle(.secondary) }
+                Section("通知") { Text("Kairos 会在计划开始时间和最晚安全开始时间发送本地提醒。高认知负荷任务会在开始前 10 分钟多一条轻量预热。文案由本地规则立即生成，连接“我的 AI”后可在打开 App 时异步精炼。通知权限在 iPhone 设置中管理。").font(.caption).foregroundStyle(.secondary) }
             }
-            .navigationTitle("Settings")
+            .navigationTitle("设置")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar(.visible, for: .navigationBar)
             .sheet(isPresented: $showingPersonalAI) { PersonalAIConnectionView() }

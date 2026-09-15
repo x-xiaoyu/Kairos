@@ -51,7 +51,7 @@ struct AskKairosView: View {
 
                         if let proposal {
                             VStack(alignment: .leading, spacing: 14) {
-                                Label("KAIROS 建议", systemImage: "wand.and.stars").font(.caption.bold()).foregroundStyle(Color.kairosPurple)
+                                Label("Kairos 建议", systemImage: "wand.and.stars").font(.caption.bold()).foregroundStyle(Color.kairosPurple)
                                 if proposal.isMultipleTaskCreation {
                                     Text("准备创建 \(proposal.operations.count) 项任务")
                                         .font(.title3.bold())

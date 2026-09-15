@@ -104,6 +104,78 @@ struct PersonalAIService {
         }
     }
 
+    func generateNudge(task: KairosTask, stage: NudgeStage, fallback: KairosAgentNudge) async throws -> KairosAgentNudge {
+        guard let apiKey = KeychainStore.read(account: "openai-api-key"), !apiKey.isEmpty else { throw PersonalAIError.notConnected }
+        let schema: [String: Any] = [
+            "type": "object",
+            "additionalProperties": false,
+            "properties": [
+                "title": ["type": "string"],
+                "subtitle": ["type": "string"],
+                "body": ["type": "string"],
+                "micro_step": ["type": "string"],
+                "primary_action": ["type": "string"],
+                "secondary_action": ["type": "string"],
+            ],
+            "required": ["title", "subtitle", "body", "micro_step", "primary_action", "secondary_action"],
+        ]
+        let stageHint: String
+        switch stage {
+        case .transition: stageHint = "transition：计划开始前的心理预热。还不用正式开始，只帮助把环境摆好。"
+        case .start: stageHint = "start：到点启动。只给一个 10 秒内能完成的最小物理动作。"
+        case .graceRescue: stageHint = "graceRescue：用户卡住、顺延，或接近最晚安全开始时间。先接纳，再给无压力的 5 分钟微专注降级。"
+        }
+        let body: [String: Any] = [
+            "model": UserDefaults.standard.string(forKey: "openAIModel").flatMap { $0.isEmpty ? nil : $0 } ?? "gpt-5-mini",
+            "instructions": """
+            你是 Kairos，一位冷静、不评判的 ADHD 执行功能辅助 Agent。目标是降低启动阻力（Activation Friction）：认知降噪、微动作破冰、防内疚。
+            禁止使用评判或闹钟式措辞，包括：到时间了、必须开始、该开始了、该做这项任务了、立即开始、你已经迟到、不能再拖、现在该做、任务已经到期、只剩最后。
+            文案要短、具体、可执行。micro_step 必须是一个身体或界面上的最小动作，而不是“开始认真做”。
+            主按钮给宽慰感，关闭/顺延按钮必须无负罪感。
+            """,
+            "input": """
+            阶段：\(stage.rawValue)（\(stageHint)）
+            任务：\(task.title)
+            目标：\(task.goal.isEmpty ? "未填写" : task.goal)
+            认知负荷：\(task.cognitiveLoad.rawValue)
+            预计时长：\(task.estimatedMinutes) 分钟
+            试水时长：\(fallback.trialMinutes) 分钟
+            本地兜底文案：title=\(fallback.title)；micro_step=\(fallback.microStep)
+            """,
+            "text": ["format": ["type": "json_schema", "name": "kairos_nudge", "strict": true, "schema": schema]],
+        ]
+
+        var request = URLRequest(url: URL(string: "https://api.openai.com/v1/responses")!)
+        request.httpMethod = "POST"
+        request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse else { throw PersonalAIError.invalidResponse }
+        guard 200..<300 ~= http.statusCode else {
+            let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+            let error = object?["error"] as? [String: Any]
+            throw PersonalAIError.provider(error?["message"] as? String ?? "OpenAI 请求失败（\(http.statusCode)）。")
+        }
+        guard let object = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            throw PersonalAIError.invalidResponse
+        }
+        let nestedText = (object["output"] as? [[String: Any]])?
+            .compactMap { $0["content"] as? [[String: Any]] }
+            .flatMap { $0 }
+            .first { $0["type"] as? String == "output_text" }?["text"] as? String
+        guard let rawText = (object["output_text"] as? String) ?? nestedText else {
+            throw PersonalAIError.invalidResponse
+        }
+        let text = Self.removingMarkdownFence(from: rawText)
+        guard let replyData = text.data(using: .utf8) else { throw PersonalAIError.invalidResponse }
+        let dto = try JSONDecoder().decode(AgentNudgeDTO.self, from: replyData)
+        return NudgeEngine.merging(
+            model: (dto.title, dto.subtitle, dto.body, dto.microStep, dto.primaryAction, dto.secondaryAction),
+            onto: fallback
+        )
+    }
+
     private static func removingMarkdownFence(from text: String) -> String {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard trimmed.hasPrefix("```") else { return trimmed }
@@ -111,5 +183,21 @@ struct PersonalAIService {
         if !lines.isEmpty { lines.removeFirst() }
         if lines.last?.trimmingCharacters(in: .whitespacesAndNewlines) == "```" { lines.removeLast() }
         return lines.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+}
+
+private struct AgentNudgeDTO: Decodable {
+    let title: String
+    let subtitle: String
+    let body: String
+    let microStep: String
+    let primaryAction: String
+    let secondaryAction: String
+
+    enum CodingKeys: String, CodingKey {
+        case title, subtitle, body
+        case microStep = "micro_step"
+        case primaryAction = "primary_action"
+        case secondaryAction = "secondary_action"
     }
 }

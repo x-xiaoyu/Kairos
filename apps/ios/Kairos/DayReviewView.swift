@@ -3,16 +3,26 @@ import SwiftUI
 struct DayReviewView: View {
     let events: [ActivityEvent]
     let completed: [KairosTask]
+    var tasks: [KairosTask] = []
     @State private var showingCompleted = false
 
     private var today: [ActivityEvent] { events.filter { Calendar.current.isDateInToday($0.timestamp) } }
+    private var timeBias: TimeBiasProfile { TimeBiasReflector.profile(tasks: tasks.isEmpty ? completed : tasks, events: events) }
+    private var actualFocusedMinutes: Int {
+        TimeBiasReflector.samples(from: tasks.isEmpty ? completed : tasks, events: events)
+            .filter { Calendar.current.isDateInToday($0.completedAt) }
+            .reduce(0) { $0 + $1.actualMinutes }
+    }
 
     var body: some View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 22) {
-                    VStack(alignment: .leading, spacing: 6) { Text("YOUR MOMENTUM").font(.caption2.bold()).tracking(1.5).foregroundStyle(Color.kairosPurple); Text("Review your day").font(.system(size: 36, weight: .bold, design: .serif)); Text("What you did, in the order it happened.").foregroundStyle(.secondary) }
-                    HStack { completedStat; stat("\(completed.reduce(0) { $0 + $1.estimatedMinutes })m", "focused"); stat("\(today.filter { $0.action.contains("Focus") }.count)", "focus events") }
-                    if showingCompleted { completedList } else { timeline(today, emptyTitle: "No activity yet") }
+                    VStack(alignment: .leading, spacing: 6) { Text("今日节奏").font(.caption2.bold()).tracking(1.5).foregroundStyle(Color.kairosPurple); Text("回顾这一天").font(.system(size: 36, weight: .bold, design: .serif)); Text("按发生顺序看看你做了什么。").foregroundStyle(.secondary) }
+                    HStack { completedStat; stat("\(actualFocusedMinutes > 0 ? actualFocusedMinutes : completed.reduce(0) { $0 + $1.estimatedMinutes }) 分钟", "真实专注"); stat("\(today.filter { $0.action.contains("Focus") }.count)", "专注事件") }
+                    if let insight = timeBias.insights.first {
+                        timeBiasCard(insight)
+                    }
+                    if showingCompleted { completedList } else { timeline(today, emptyTitle: "今天还没有记录") }
                 }.padding(20)
             }
             .background(KairosTheme.background)
@@ -23,18 +33,38 @@ struct DayReviewView: View {
 
     private func stat(_ value: String, _ label: String) -> some View { VStack(alignment: .leading) { Text(value).font(.title2.bold()).foregroundStyle(Color.kairosPurple); Text(label).font(.caption).foregroundStyle(.secondary) }.frame(maxWidth: .infinity, alignment: .leading).padding(14).background(LinearGradient(colors: [.white, .kairosPurple.opacity(0.09)], startPoint: .topLeading, endPoint: .bottomTrailing), in: RoundedRectangle(cornerRadius: 6)) }
 
+    private func timeBiasCard(_ insight: TimeBiasInsight) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("时间盲症校准").font(.caption.bold()).foregroundStyle(Color.kairosIndigo)
+            Text(insight.recommendationText).font(.subheadline.weight(.medium))
+            if insight.isCalibration {
+                Text("排期已用校准后的时长计算最晚开始时间；若你更想按自己填的数字走，预警会更灵敏。")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else if insight.averageUnderestimateMinutes != 0 {
+                Text("已根据最近 \(insight.sampleCount) 次完成记录，把排期缓冲调整为约 \(Int((insight.biasRatio * 100).rounded()))%。")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(16)
+        .background(LinearGradient(colors: [.white, Color.kairosSun.opacity(0.12)], startPoint: .topLeading, endPoint: .bottomTrailing), in: RoundedRectangle(cornerRadius: 8))
+        .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.kairosSun.opacity(0.28)))
+    }
+
     private var completedStat: some View {
         Button { withAnimation(.easeInOut(duration: 0.25)) { showingCompleted.toggle() } } label: {
             VStack(alignment: .leading) {
                 HStack { Text("\(completed.count)").font(.title2.bold()); Spacer(); Image(systemName: "chevron.right").font(.caption.bold()) }
-                Text("completed").font(.caption)
+                Text("已完成").font(.caption)
             }.foregroundStyle(Color.kairosPurple).frame(maxWidth: .infinity, alignment: .leading).padding(14).background(LinearGradient(colors: [.white, .kairosPurple.opacity(showingCompleted ? 0.24 : 0.15)], startPoint: .topLeading, endPoint: .bottomTrailing), in: RoundedRectangle(cornerRadius: 6)).overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.kairosPurple.opacity(showingCompleted ? 0.75 : 0.18), lineWidth: showingCompleted ? 2 : 1))
-        }.buttonStyle(.plain).accessibilityHint("Shows all completed tasks")
+        }.buttonStyle(.plain).accessibilityHint("查看全部已完成任务")
     }
 
     private func timeline(_ items: [ActivityEvent], emptyTitle: String) -> some View {
         VStack(alignment: .leading, spacing: 0) {
-            if items.isEmpty { ContentUnavailableView(emptyTitle, systemImage: "clock", description: Text("Your actions will appear here with their exact time.")) }
+            if items.isEmpty { ContentUnavailableView(emptyTitle, systemImage: "clock", description: Text("你的操作会按准确时间出现在这里。")) }
             ForEach(items) { event in
                 HStack(alignment: .top, spacing: 14) {
                     Text(event.timestamp.formatted(date: .omitted, time: .shortened)).font(.caption.bold()).foregroundStyle(.secondary).frame(width: 70, alignment: .leading)
@@ -47,13 +77,13 @@ struct DayReviewView: View {
 
     private var completedList: some View {
         VStack(alignment: .leading, spacing: 12) {
-            HStack { Text("Completed tasks").font(.headline); Spacer(); Button("All activity") { withAnimation { showingCompleted = false } }.font(.caption.bold()) }
-            if completed.isEmpty { ContentUnavailableView("No completed tasks", systemImage: "checkmark.circle", description: Text("Tasks appear here after you complete them.")) }
+            HStack { Text("已完成的任务").font(.headline); Spacer(); Button("全部动态") { withAnimation { showingCompleted = false } }.font(.caption.bold()) }
+            if completed.isEmpty { ContentUnavailableView("还没有完成的任务", systemImage: "checkmark.circle", description: Text("完成任务后会出现在这里。")) }
             ForEach(completed.sorted { completionDate(for: $0) > completionDate(for: $1) }) { task in
                 VStack(alignment: .leading, spacing: 7) {
                     HStack { Image(systemName: "checkmark.circle.fill").foregroundStyle(Color.kairosGreen); Text(task.title).font(.headline); Spacer(); Text(completionDate(for: task).formatted(date: .abbreviated, time: .shortened)).font(.caption2).foregroundStyle(.secondary) }
                     if !task.goal.isEmpty { Text(task.goal).font(.subheadline).foregroundStyle(.secondary) }
-                    HStack { Label("\(task.estimatedMinutes)m", systemImage: "timer"); Text("Priority \(task.priority)"); Spacer(); Button("Restore") { task.status = .todo }.font(.caption.bold()) }.font(.caption).foregroundStyle(.secondary)
+                    HStack { Label("\(task.estimatedMinutes) 分钟", systemImage: "timer"); Text("优先级 \(task.priority)"); Spacer(); Button("恢复为待办") { task.status = .todo }.font(.caption.bold()) }.font(.caption).foregroundStyle(.secondary)
                 }.padding(14).background(Color.kairosGreen.opacity(0.07), in: RoundedRectangle(cornerRadius: 7))
             }
         }.padding(18).background(.white, in: RoundedRectangle(cornerRadius: 8)).transition(.opacity.combined(with: .move(edge: .bottom)))

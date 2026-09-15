@@ -5,6 +5,7 @@ struct TaskEditor: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.modelContext) private var context
     @Query(sort: \KairosTask.createdAt) private var allTasks: [KairosTask]
+    @Query(sort: \ActivityEvent.timestamp, order: .reverse) private var events: [ActivityEvent]
     var task: KairosTask?
     @State private var title = ""
     @State private var goal = ""
@@ -18,22 +19,23 @@ struct TaskEditor: View {
     @State private var deadlineType = DeadlineType.soft
     @State private var interruptible = true
     @State private var isPrimaryCountdown = false
+    @State private var calibrationChoice = TimeBiasCalibrationChoice.automatic
 
     var body: some View {
         Form {
-                Section("What needs doing?") { TextField("Task title", text: $title); TextField("Goal (optional)", text: $goal) }
-                Section("Time") {
+                Section("要做什么？") { TextField("任务名称", text: $title); TextField("目标（可选）", text: $goal) }
+                Section("时间") {
                     Toggle("设置开始时间", isOn: $hasScheduledStart)
                     if hasScheduledStart {
                         DatePicker("开始", selection: $scheduledStart, in: Date.now..., displayedComponents: [.date, .hourAndMinute])
-                        Text("到达开始时间时，Kairos 会提醒你该做这项任务。")
+                        Text("到点时，Kairos 会给出一个很小的破冰动作，而不是催你必须开始。高认知负荷任务会在开始前 10 分钟先做心理预热。")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
-                    Toggle("Has a deadline", isOn: $hasDeadline)
-                    if hasDeadline { DatePicker("Deadline", selection: $deadline, in: Date.now..., displayedComponents: [.date, .hourAndMinute]); Toggle("设为首页主要倒数日", isOn: $isPrimaryCountdown); Picker("Deadline type", selection: $deadlineType) { ForEach(DeadlineType.allCases, id: \.self) { Text($0.rawValue.capitalized).tag($0) } } }
+                    Toggle("设置截止时间", isOn: $hasDeadline)
+                    if hasDeadline { DatePicker("截止时间", selection: $deadline, in: Date.now..., displayedComponents: [.date, .hourAndMinute]); Toggle("设为首页主要倒数日", isOn: $isPrimaryCountdown); Picker("截止类型", selection: $deadlineType) { ForEach(DeadlineType.allCases, id: \.self) { Text($0.displayName).tag($0) } } }
                     HStack {
-                        Text("Estimated duration")
+                        Text("预计时长")
                         Spacer()
                         TextField("30", value: $minutes, format: .number)
                             .keyboardType(.numberPad)
@@ -42,23 +44,36 @@ struct TaskEditor: View {
                             .padding(.horizontal, 12)
                             .padding(.vertical, 8)
                             .background(Color.kairosBlue.opacity(0.10), in: RoundedRectangle(cornerRadius: 5))
-                        Text("min").foregroundStyle(.secondary)
+                        Text("分钟").foregroundStyle(.secondary)
                     }
-                    if !(5...720).contains(minutes) { Text("Enter a duration from 5 to 720 minutes.").font(.caption).foregroundStyle(.red) }
+                    if !(5...720).contains(minutes) { Text("请输入 5 到 720 分钟。").font(.caption).foregroundStyle(.red) }
+                    if let insight = editorBiasInsight {
+                        TimeBiasInsightBubble(
+                            text: insight.message(forEstimatedMinutes: max(5, minutes)),
+                            choice: calibrationChoice,
+                            onReserve: {
+                                minutes = TimeBiasReflector.reservedMinutes(estimated: max(5, minutes), biasRatio: insight.biasRatio)
+                                calibrationChoice = .accepted
+                            },
+                            onKeepEstimate: { calibrationChoice = .declined }
+                        )
+                        .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
+                        .listRowBackground(Color.clear)
+                    }
                 }
-                Section("Effort") {
-                    Picker("Priority", selection: $priority) { ForEach(1...5, id: \.self) { Text("\($0)").tag($0) } }
-                    Picker("Cognitive load", selection: $load) { ForEach(CognitiveLoad.allCases, id: \.self) { Text($0.rawValue.capitalized).tag($0) } }
-                    Toggle("Can be interrupted", isOn: $interruptible)
+                Section("投入") {
+                    Picker("优先级", selection: $priority) { ForEach(1...5, id: \.self) { Text("\($0)").tag($0) } }
+                    Picker("认知负荷", selection: $load) { ForEach(CognitiveLoad.allCases, id: \.self) { Text($0.displayName).tag($0) } }
+                    Toggle("可被打断", isOn: $interruptible)
                 }
         }
-        .navigationTitle(task == nil ? "New task" : "Edit task")
+        .navigationTitle(task == nil ? "新建任务" : "编辑任务")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             if task == nil {
-                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
+                ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } }
             }
-            ToolbarItem(placement: .confirmationAction) { Button("Save") { save() }.disabled(title.trimmingCharacters(in: .whitespaces).isEmpty || !(5...720).contains(minutes)) }
+            ToolbarItem(placement: .confirmationAction) { Button("保存") { save() }.disabled(title.trimmingCharacters(in: .whitespaces).isEmpty || !(5...720).contains(minutes)) }
         }
         .onAppear {
             guard let task else { return }
@@ -67,7 +82,15 @@ struct TaskEditor: View {
             minutes = task.estimatedMinutes; priority = task.priority; load = task.cognitiveLoad
             deadlineType = task.deadlineType; interruptible = task.isInterruptible
             isPrimaryCountdown = task.isPrimaryCountdown
+            calibrationChoice = task.timeBiasCalibration
         }
+    }
+
+    private var editorBiasInsight: TimeBiasInsight? {
+        let profile = TimeBiasReflector.profile(tasks: allTasks, events: events)
+        guard profile.shouldCalibrate(load) else { return nil }
+        return TimeBiasReflector.insight(for: load, tasks: allTasks, events: events)
+            ?? profile.insights.first { $0.isCalibration }
     }
 
     private func save() {
@@ -79,8 +102,11 @@ struct TaskEditor: View {
             task.scheduledStart = hasScheduledStart ? scheduledStart : nil
             task.priority = priority; task.cognitiveLoad = load; task.deadlineType = hasDeadline ? deadlineType : .none; task.isInterruptible = interruptible
             task.isPrimaryCountdown = hasDeadline && isPrimaryCountdown
+            task.timeBiasCalibration = calibrationChoice
         } else {
-            context.insert(KairosTask(title: title, goal: goal, deadline: hasDeadline ? deadline : nil, scheduledStart: hasScheduledStart ? scheduledStart : nil, estimatedMinutes: minutes, priority: priority, cognitiveLoad: load, isInterruptible: interruptible, deadlineType: hasDeadline ? deadlineType : .none, isPrimaryCountdown: hasDeadline && isPrimaryCountdown))
+            let created = KairosTask(title: title, goal: goal, deadline: hasDeadline ? deadline : nil, scheduledStart: hasScheduledStart ? scheduledStart : nil, estimatedMinutes: minutes, priority: priority, cognitiveLoad: load, isInterruptible: interruptible, deadlineType: hasDeadline ? deadlineType : .none, isPrimaryCountdown: hasDeadline && isPrimaryCountdown)
+            created.timeBiasCalibration = calibrationChoice
+            context.insert(created)
             context.insert(ActivityEvent(action: "Task created", taskTitle: title, detail: "Estimated at \(minutes) minutes."))
         }
         dismiss()

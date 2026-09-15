@@ -1,48 +1,104 @@
-# Kairos
+# Kairos: AI-Powered Executive Function & Action Agent
 
-**Know when it’s time to start.**
+> **Know when it's time to start — and break the friction to get there.**
 
-Kairos is an adaptive personal execution agent for people who know what they need to do but struggle to choose what to do now. It creates a realistic daily path, calculates each task’s Latest Safe Start Time, and replans calmly when the day changes.
+Kairos is a proactive, ADHD-tailored personal execution AI Agent for people who know *what* they need to do, but struggle with **executive dysfunction, time blindness, and task paralysis**.
 
-This hackathon-ready monorepo pairs a Next.js UI with a FastAPI planning service. Time arithmetic stays deterministic; optional Strands Agents + Amazon Bedrock support is reserved for judgment-heavy assistance and falls back gracefully without AWS credentials.
+Unlike conventional to-do apps and passive calendar alarms (which rely on guilt-inducing notifications that users ignore), Kairos acts as an empathetic, context-aware **AI Body Double**. It pairs deterministic deadline-risk calculation with LLM reasoning to deconstruct overwhelming tasks into friction-free micro-steps right when intervention matters most.
 
-Kairos also includes a native SwiftUI iPhone app in `apps/ios`. The native app is the primary path for personal use: it stores real tasks and routines with SwiftData, schedules local Latest Safe Start notifications, records a timestamped day history, and provides a full-screen focus countdown.
+---
 
-## MVP features
+## The Core Philosophy: Why an Agent, Not an Alarm?
 
-- Goals and richly described tasks: deadline, duration, priority, status, cognitive load, interruptibility, and deadline type
-- Workstyle-aware planning and peak-energy placement
-- Latest Safe Start calculations and safe/warning/high/critical risk levels
-- Interactive focus countdown
-- Start, complete, postpone, duration, and priority action support with replanning
-- History-based adjustment of focus length and estimates
-- Local heuristic fallback when the API or AWS is unavailable
-- Focused scheduling and replanning tests
+- **Passive Timers vs. Contextual Nudges**: Alarms say "Task X is due now" (panic or freeze). The Kairos Agent runs a **3-tier pre-flight nudge pipeline** (`Transition` → `Micro-step Kickoff` → `Friction Grace Rescue`), preparing attention and the physical environment before the clock strikes.
+- **Micro-Step Activation (Zero-Friction Ignition)**: Reduces startup paralysis by decomposing high-cognitive tasks into non-threatening physical actions (for example: *"Open the page and type a title."*).
+- **Non-Judgmental Dynamic Replanning**: Postponing a task triggers instant, localized re-orchestration — adjacent swap within the same day — without guilt-laden red badges.
 
-## Structure
+---
+
+## Agentic System Architecture
+
+Kairos follows a **Constrained Execution & Dual-Core Architecture**, prioritizing verifiable time math over end-to-end LLM scheduling:
+
+```text
+       [ User Actions / Speech / iOS Sensors / Calendar Events ]
+                                  │
+                                  ▼
+      ┌────────────────────────────────────────────────────────┐
+      │   Layer 1: Perception & Intent Router (Local / FastAPI) │
+      │   • On-device intent parsing and Agent chat            │
+      │   • Task Cognitive Load (Low / Med / High)             │
+      └───────────────────────────┬────────────────────────────┘
+                                  ▼
+      ┌────────────────────────────────────────────────────────┐
+      │   Layer 2: Deterministic Planner & State Machine        │
+      │   • Latest Safe Start (Safe by) hard boundary math     │
+      │   • Localized cascade postponement (adjacent swap)     │
+      │   • Real wall-clock elapsed background reconciliation  │
+      └───────────────────────────┬────────────────────────────┘
+                                  ▼
+      ┌────────────────────────────────────────────────────────┐
+      │   Layer 3: Agentic Reasoning & Adaptive Persona        │
+      │   • CBT-informed micro-step copy (local + optional LLM)│
+      │   • Safe-by friction detection & Grace Rescue          │
+      │   • Body-doubling interactive full-screen launchpad    │
+      └────────────────────────────────────────────────────────┘
+```
+
+**Deterministic Scheduling Core (zero math hallucination):** Deadlines, buffers, and Latest Safe Start are computed in Swift/Python engines — never guessed by the LLM.
+
+**Cognitive Agent Layer:** Local heuristics, a personal OpenAI key (Keychain-protected), or the FastAPI backend (Amazon Bedrock when enabled). The Agent handles intent, cognitive-load-aware micro-steps, and suggested replans. It never owns deadline arithmetic.
+
+---
+
+## Key Features
+
+- **Dynamic Latest Safe Start (Safe by):** Real-time calculation of the latest moment a task can begin without collapsing the rest of the day.
+- **3-Phase Adaptive Pre-flight Interventions:**
+  - **Transition buffer (~10 minutes before start, High cognitive load):** Gentle context-switching, not a demand to begin.
+  - **T-0 Micro-step ignition:** One minimal physical kickoff cue.
+  - **Grace Rescue (near Safe by, postpone, or overdue):** Self-compassionate downgrade, including a 5-minute micro-focus option.
+- **Friction-Free Parallel Focus:** True background elapsed-time tracking; concurrent activities can be paused independently; sessions survive force-quit.
+- **Live Activities:** In-progress focus, a system countdown, and the current Agent micro-step stay on Dynamic Island and the lock screen so leaving the app does not drop the cue.
+- **Apple Calendar write-back:** Saves validated real-focus intervals for reflection.
+- **Zero cloud lock-in:** SwiftData local persistence, WidgetKit glances, and on-device intent fallback when offline.
+
+---
+
+## Repository Layout
 
 ```text
 apps/
-  api/   FastAPI, deterministic scheduler, adaptation, Strands/Bedrock adapter
-  ios/   Native SwiftUI app with SwiftData and local notifications
-  web/   Next.js dashboard and local demo fallback
+  api/          FastAPI orchestration, deterministic scheduler,
+                ADHD-aware adaptation tools, Bedrock adapters
+  ios/          Native SwiftUI app (SwiftData, wall-clock timers,
+                Keychain-backed Agent settings, WidgetKit)
+  web/          Next.js dashboard and local fallback playground
 ```
 
-## Run locally
+---
 
-Requirements: Node.js 20+, Python 3.11+, and npm.
+## Getting Started
 
-Start the API:
+### 1. Backend orchestration (FastAPI)
+
+Requirements: Python 3.11+ and a virtual environment.
 
 ```bash
 cd apps/api
-python -m venv .venv
+python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 uvicorn kairos.main:app --reload --port 8000
 ```
 
-Then start the web app in another terminal:
+Interactive API docs: [http://localhost:8000/docs](http://localhost:8000/docs).
+
+Optional Amazon Bedrock: copy `.env.example` to `.env`, set `KAIROS_AI_ENABLED=true`, and provide AWS credentials through the normal AWS chain. Init or inference errors fall back to local heuristics. The adapter never owns deadline arithmetic.
+
+### 2. Web dashboard (Next.js)
+
+Requirements: Node.js 20+ and npm.
 
 ```bash
 cd apps/web
@@ -50,24 +106,11 @@ npm install
 npm run dev
 ```
 
-Open `http://localhost:3000`; API docs are at `http://localhost:8000/docs`. Sample deadlines are relative to the current time. If the API is offline, the UI automatically uses its local scheduler.
+Open [http://localhost:3000](http://localhost:3000). If the API is offline, the UI uses its local scheduler.
 
-## Enable Amazon Bedrock
+### 3. Native iOS client (SwiftUI)
 
-Copy `.env.example` to `.env`, set `KAIROS_AI_ENABLED=true`, and provide AWS credentials through the normal AWS credential chain. The default is Amazon Nova Lite. Initialization or inference errors fall back to local heuristics. The adapter currently supplies cognitive-load classification; agent judgment never owns deadline arithmetic.
-
-## Verify
-
-```bash
-cd apps/api && pytest
-cd apps/web && npm run build
-```
-
-Key endpoints are `POST /plan`, `POST /actions`, `POST /adapt`, `POST /agent/chat`, and `GET /health`.
-
-## Run the native iPhone app
-
-Requirements: macOS with full Xcode installed, iOS 17 or newer, and [XcodeGen](https://github.com/yonaskolb/XcodeGen).
+Requirements: macOS with Xcode 16+, iOS 17+, and [XcodeGen](https://github.com/yonaskolb/XcodeGen).
 
 ```bash
 cd apps/ios
@@ -76,15 +119,25 @@ xcodegen generate
 open Kairos.xcodeproj
 ```
 
-In Xcode, select the **Kairos** target, open **Signing & Capabilities**, choose your Apple ID team, change the bundle identifier if Xcode reports a conflict, and select your connected iPhone as the run destination. Press Run. A free Apple ID can be used for direct personal-device development; Xcode will explain any provisioning limitations.
+In Xcode, select target **Kairos**, configure **Signing & Capabilities** (Personal Team is supported), and pick a device or simulator.
 
-The first launch starts empty—add your own tasks with the `+` button. Allow notifications when prompted so Kairos can alert you at each task’s Latest Safe Start. Local notifications are scheduled on the phone and do not require the Python server. Daily routines and the timestamped Review My Day history are stored on-device with SwiftData.
+**Agent configuration:** In Settings, connect to a local Mac backend (`http://<YOUR_LOCAL_IP>:8000`) or store a personal OpenAI key in the iOS Keychain. Simulator default is `http://127.0.0.1:8000`; the on-device parser is used if the API is unavailable. AWS credentials stay on the backend, never in the app.
 
-Ask Kairos uses `http://127.0.0.1:8000` by default in the iOS Simulator and automatically falls back to its on-device intent parser if the API is unavailable. For a physical iPhone, open Kairos Settings and use the Mac's LAN address (for example `http://192.168.1.10:8000`) while developing. AWS credentials always stay on the backend, never in the app.
+---
 
-The Agent picker also offers **My AI** for personal OpenAI API usage. The user creates an API key in OpenAI Platform and Kairos stores it in the iOS Keychain with this-device-only protection; it is never stored in SwiftData or logs. This is an advanced personal-use option. A public release should replace long-lived client credentials with a short-lived authorization flow or a user-controlled secure proxy.
+## Verification & Test Suites
 
-For the demo, start the highlighted task, pause/resume its timer, postpone it to see the plan reorder, then complete the next task. The Latest Safe Start panel explains why timing matters without guilt or alarmist language.
+```bash
+# Python scheduler and agent endpoints
+cd apps/api && pytest
+
+# Web dashboard
+cd apps/web && npm run build
+```
+
+iOS: open the **Kairos** scheme in Xcode and run tests on the iOS Simulator. Key API endpoints are `POST /plan`, `POST /actions`, `POST /adapt`, `POST /agent/chat`, and `GET /health`.
+
+---
 
 ## License
 

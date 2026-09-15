@@ -33,6 +33,8 @@
 	<string>Kairos connects to your local Agent service during development.</string>
 	<key>NSLocationWhenInUseUsageDescription</key>
 	<string>Kairos uses your approximate location to show current local weather.</string>
+	<key>NSSupportsLiveActivities</key>
+	<true/>
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>
 	<key>UILaunchScreen</key>

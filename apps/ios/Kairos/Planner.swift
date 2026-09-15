@@ -1,6 +1,16 @@
 import Foundation
 
-enum RiskLevel: String { case safe, warning, high, critical }
+enum RiskLevel: String {
+    case safe, warning, high, critical
+    var displayName: String {
+        switch self {
+        case .safe: "从容"
+        case .warning: "留意"
+        case .high: "紧迫"
+        case .critical: "紧急"
+        }
+    }
+}
 
 struct PlannedTask: Identifiable {
     let task: KairosTask
@@ -37,14 +47,15 @@ enum Planner {
         task.availableAfter = nil
     }
 
-    static func latestSafeStart(for task: KairosTask, among tasks: [KairosTask], adjustment: Double = 1) -> Date? {
+    static func latestSafeStart(for task: KairosTask, among tasks: [KairosTask], adjustment: Double = 1, bias: TimeBiasProfile = .neutral, ignoreDecline: Bool = false) -> Date? {
         guard let deadline = task.deadline, task.deadlineType != .none else { return nil }
         let competing = tasks.filter { other in
             other.id != task.id && other.status != .complete && other.deadline.map { $0 <= deadline } == true &&
             (other.priority > task.priority || (other.deadline ?? .distantFuture) < deadline)
-        }.reduce(0) { $0 + Int(Double($1.estimatedMinutes) * adjustment) }
+        }.reduce(0) { $0 + TimeBiasReflector.calibratedDuration(for: $1, bias: bias, baseAdjustment: adjustment, ignoreDecline: ignoreDecline) }
         let buffer = task.deadlineType == .hard ? 15 : 5
-        return Calendar.current.date(byAdding: .minute, value: -(Int(Double(task.estimatedMinutes) * adjustment) + competing + buffer), to: deadline)
+        let own = TimeBiasReflector.calibratedDuration(for: task, bias: bias, baseAdjustment: adjustment, ignoreDecline: ignoreDecline)
+        return Calendar.current.date(byAdding: .minute, value: -(own + competing + buffer), to: deadline)
     }
 
     static func risk(now: Date, latestStart: Date?, estimatedMinutes: Int) -> RiskLevel {
@@ -56,7 +67,7 @@ enum Planner {
         return .safe
     }
 
-    static func makePlan(tasks: [KairosTask], now: Date = .now, adjustment: Double = 1) -> [PlannedTask] {
+    static func makePlan(tasks: [KairosTask], now: Date = .now, adjustment: Double = 1, bias: TimeBiasProfile = .neutral) -> [PlannedTask] {
         let calendar = Calendar.current
         let active = tasks.filter { $0.status != .complete }.sorted {
             isOrderedBefore($0, $1, now: now, calendar: calendar)
@@ -71,10 +82,24 @@ enum Planner {
             }
             if let scheduledStart = task.scheduledStart, scheduledStart > cursor { cursor = scheduledStart }
             if let availableAfter = task.availableAfter, availableAfter > cursor { cursor = availableAfter }
-            let minutes = max(5, Int(Double(task.estimatedMinutes) * adjustment))
+            let minutes = TimeBiasReflector.calibratedDuration(for: task, bias: bias, baseAdjustment: adjustment)
             let end = Calendar.current.date(byAdding: .minute, value: minutes, to: cursor)!
-            let latest = latestSafeStart(for: task, among: active, adjustment: adjustment)
-            let item = PlannedTask(task: task, start: cursor, end: end, latestSafeStart: latest, risk: risk(now: now, latestStart: latest, estimatedMinutes: minutes))
+            let latest = latestSafeStart(for: task, among: active, adjustment: adjustment, bias: bias)
+            let ratio = bias.adjustment(for: task.cognitiveLoad)
+            let declined = task.timeBiasCalibration == .declined
+            let riskLatest = declined && ratio > TimeBiasReflector.underestimateThreshold
+                ? latestSafeStart(for: task, among: active, adjustment: adjustment, bias: bias, ignoreDecline: true)
+                : latest
+            let riskMinutes = declined && ratio > TimeBiasReflector.underestimateThreshold
+                ? TimeBiasReflector.calibratedDuration(for: task, bias: bias, baseAdjustment: adjustment, ignoreDecline: true)
+                : minutes
+            let item = PlannedTask(
+                task: task,
+                start: cursor,
+                end: end,
+                latestSafeStart: latest,
+                risk: risk(now: now, latestStart: riskLatest, estimatedMinutes: riskMinutes)
+            )
             cursor = Calendar.current.date(byAdding: .minute, value: 5, to: end)!
             return item
         }

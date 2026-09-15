@@ -2,11 +2,11 @@ import CoreLocation
 import Foundation
 
 @MainActor
-final class WeatherManager: NSObject, ObservableObject, CLLocationManagerDelegate {
+final class WeatherManager: NSObject, ObservableObject {
     @Published private(set) var symbol = "sun.max.fill"
     @Published private(set) var temperature: String?
-    @Published private(set) var condition = "Weather unavailable"
-    @Published private(set) var locationName = "Current location"
+    @Published private(set) var condition = "暂时无法获取天气"
+    @Published private(set) var locationName = "当前位置"
 
     private let locationManager = CLLocationManager()
 
@@ -24,20 +24,17 @@ final class WeatherManager: NSObject, ObservableObject, CLLocationManagerDelegat
         }
     }
 
-    func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
-        if manager.authorizationStatus == .authorizedWhenInUse || manager.authorizationStatus == .authorizedAlways { manager.requestLocation() }
+    private func handleAuthorization(_ status: CLAuthorizationStatus) {
+        if status == .authorizedWhenInUse || status == .authorizedAlways {
+            locationManager.requestLocation()
+        }
     }
 
-    func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
-        guard let location = locations.last else { return }
+    private func handleLocation(_ location: CLLocation) {
         Task {
             await resolvePlace(for: location)
             await load(latitude: location.coordinate.latitude, longitude: location.coordinate.longitude)
         }
-    }
-
-    func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {
-        condition = "Location unavailable"
     }
 
     private func load(latitude: Double, longitude: Double) async {
@@ -58,27 +55,49 @@ final class WeatherManager: NSObject, ObservableObject, CLLocationManagerDelegat
             temperature = "\(Int(weather.temperature.rounded()))°"
             let appearance = Self.appearance(for: weather.code)
             symbol = appearance.symbol; condition = appearance.name
-        } catch { condition = "Weather unavailable" }
+        } catch { condition = "暂时无法获取天气" }
     }
 
     private func resolvePlace(for location: CLLocation) async {
         do {
             let places = try await CLGeocoder().reverseGeocodeLocation(location)
             guard let place = places.first else { return }
-            locationName = place.locality ?? place.subAdministrativeArea ?? place.administrativeArea ?? "Current location"
-        } catch { locationName = "Current location" }
+            locationName = place.locality ?? place.subAdministrativeArea ?? place.administrativeArea ?? "当前位置"
+        } catch { locationName = "当前位置" }
     }
 
     private static func appearance(for code: Int) -> (symbol: String, name: String) {
         switch code {
-        case 0: ("sun.max.fill", "Clear")
-        case 1...3: ("cloud.sun.fill", "Partly cloudy")
-        case 45, 48: ("cloud.fog.fill", "Foggy")
-        case 51...57: ("cloud.drizzle.fill", "Drizzle")
-        case 61...67, 80...82: ("cloud.rain.fill", "Rain")
-        case 71...77, 85, 86: ("cloud.snow.fill", "Snow")
-        case 95...99: ("cloud.bolt.rain.fill", "Thunderstorm")
-        default: ("cloud.fill", "Cloudy")
+        case 0: ("sun.max.fill", "晴")
+        case 1...3: ("cloud.sun.fill", "多云")
+        case 45, 48: ("cloud.fog.fill", "雾")
+        case 51...57: ("cloud.drizzle.fill", "毛毛雨")
+        case 61...67, 80...82: ("cloud.rain.fill", "雨")
+        case 71...77, 85, 86: ("cloud.snow.fill", "雪")
+        case 95...99: ("cloud.bolt.rain.fill", "雷雨")
+        default: ("cloud.fill", "阴")
+        }
+    }
+}
+
+extension WeatherManager: CLLocationManagerDelegate {
+    nonisolated func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
+        let status = manager.authorizationStatus
+        Task { @MainActor in
+            self.handleAuthorization(status)
+        }
+    }
+
+    nonisolated func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
+        guard let location = locations.last else { return }
+        Task { @MainActor in
+            self.handleLocation(location)
+        }
+    }
+
+    nonisolated func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {
+        Task { @MainActor in
+            self.condition = "暂时无法获取位置"
         }
     }
 }

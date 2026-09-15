@@ -11,7 +11,11 @@ targets:
   Kairos:
     type: application
     platform: iOS
-    sources: [Kairos]
+    sources:
+      - Kairos
+      - path: Shared
+        includes:
+          - KairosFocusAttributes.swift
     info:
       path: Kairos/Info.plist
       properties:
@@ -22,6 +26,7 @@ targets:
         NSLocalNetworkUsageDescription: Kairos connects to your local Agent service during development.
         NSAppTransportSecurity:
           NSAllowsLocalNetworking: true
+        NSSupportsLiveActivities: true
         UIApplicationSupportsIndirectInputEvents: true
         UILaunchScreen: {}
         UISupportedInterfaceOrientations:

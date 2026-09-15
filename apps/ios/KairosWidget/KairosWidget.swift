@@ -118,6 +118,13 @@ private struct KairosWidgetView: View {
 }
 
 @main
+struct KairosWidgets: WidgetBundle {
+    var body: some Widget {
+        KairosCountdownWidget()
+        KairosLiveActivity()
+    }
+}
+
 struct KairosCountdownWidget: Widget {
     let kind = "KairosCountdownWidget"
 

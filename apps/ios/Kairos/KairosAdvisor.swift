@@ -70,6 +70,41 @@ struct KairosRecommendation {
     let urgency: RiskLevel
 }
 
+enum NudgeStage: String, Equatable, Sendable {
+    /// 计划开始前 10–15 分钟的心理预热，尤其适合高认知负荷任务。
+    case transition
+    /// 到点启动：只给出一个毫不费力的最小物理动作。
+    case start
+    /// 临近 Latest Safe Start 或用户刚顺延：接纳卡壳，提供无压力降级。
+    case graceRescue
+}
+
+enum NudgeSource: String, Equatable, Sendable {
+    case local
+    case model
+}
+
+struct KairosAgentNudge: Equatable, Sendable {
+    let stage: NudgeStage
+    let title: String
+    let subtitle: String
+    let body: String
+    let microStep: String
+    let microStepLabel: String
+    let primaryActionTitle: String
+    let secondaryActionTitle: String
+    let trialMinutes: Int
+    let source: NudgeSource
+
+    var composedMicroStep: String {
+        "💡 \(microStepLabel)：\(microStep)"
+    }
+
+    var notificationBody: String {
+        [body, composedMicroStep].filter { !$0.isEmpty }.joined(separator: " ")
+    }
+}
+
 enum KairosAdvisor {
     static func recommendation(for plan: [PlannedTask], now: Date = .now) -> KairosRecommendation? {
         guard let next = plan.first else { return nil }
@@ -91,13 +126,36 @@ enum KairosAdvisor {
         } else {
             consequence = "现在仍有调整空间，但立即开始可以保留稍后的自由时间。"
         }
-        return KairosRecommendation(eyebrow: next.risk == .safe ? "KAIROS 建议" : "安全时间正在缩短", headline: "现在开始“\(next.task.title)”", reason: reason, consequence: consequence, urgency: next.risk)
+        return KairosRecommendation(eyebrow: next.risk == .safe ? "Kairos 建议" : "安全时间正在缩短", headline: "现在开始“\(next.task.title)”", reason: reason, consequence: consequence, urgency: next.risk)
     }
 
     private static func remainingTimeText(minutes: Int) -> String {
         if minutes >= 24 * 60 { return "\(max(1, minutes / (24 * 60))) 天" }
         if minutes >= 60 { return "\(max(1, minutes / 60)) 小时" }
         return "\(minutes) 分钟"
+    }
+
+    static func generateLocalNudge(for task: KairosTask, stage: NudgeStage) -> KairosAgentNudge {
+        NudgeEngine.localNudge(for: task, stage: stage)
+    }
+
+    static func resolveNudgeStage(for task: KairosTask, latestSafeStart: Date?, now: Date = .now) -> NudgeStage {
+        if task.dayOrder > 0 { return .graceRescue }
+        if let latest = latestSafeStart, latest.timeIntervalSince(now) <= 15 * 60 { return .graceRescue }
+        if let start = task.scheduledStart, now < start { return .transition }
+        return .start
+    }
+
+    /// 本地规则立即返回；若已连接个人大模型，再异步精炼。失败时静默回落到本地文案。
+    static func generateNudge(for task: KairosTask, stage: NudgeStage) async -> KairosAgentNudge {
+        let local = generateLocalNudge(for: task, stage: stage)
+        let mode = UserDefaults.standard.string(forKey: "agentMode") ?? "local"
+        guard mode == "personal" else { return local }
+        do {
+            return try await PersonalAIService().generateNudge(task: task, stage: stage, fallback: local)
+        } catch {
+            return local
+        }
     }
 
     static func interpret(_ input: String, tasks: [KairosTask], now: Date = .now, countedTaskStyle: String = "split") -> KairosAgentProposal {
@@ -251,5 +309,176 @@ enum KairosAdvisor {
 
     private static func noTaskProposal() -> KairosAgentProposal {
         KairosAgentProposal(action: .none, title: "目前没有待办任务", explanation: "先添加一个任务，之后我就能帮你推迟、修改时长、完成和重新安排。", requiresConfirmation: false)
+    }
+}
+
+enum NudgeEngine {
+    static let forbiddenPhrases = [
+        "到时间了", "必须开始", "该开始了", "该做这项任务了", "立即开始",
+        "你已经迟到", "不能再拖", "现在该做", "任务已经到期", "只剩最后"
+    ]
+
+    static func localNudge(for task: KairosTask, stage: NudgeStage) -> KairosAgentNudge {
+        let trial = trialMinutes(for: task, stage: stage)
+        let micro = microStep(for: task, stage: stage)
+        let copy = copyDeck(load: task.cognitiveLoad, stage: stage, trial: trial)
+        return KairosAgentNudge(
+            stage: stage,
+            title: copy.title,
+            subtitle: copy.subtitle,
+            body: copy.body,
+            microStep: micro,
+            microStepLabel: copy.label,
+            primaryActionTitle: copy.primary,
+            secondaryActionTitle: copy.secondary,
+            trialMinutes: trial,
+            source: .local
+        )
+    }
+
+    static func isJudgmental(_ text: String) -> Bool {
+        forbiddenPhrases.contains { text.contains($0) }
+    }
+
+    static func merging(model copy: (title: String, subtitle: String, body: String, microStep: String, primary: String, secondary: String), onto fallback: KairosAgentNudge) -> KairosAgentNudge {
+        let fields = [copy.title, copy.subtitle, copy.body, copy.microStep, copy.primary, copy.secondary]
+        if fields.contains(where: { $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isJudgmental($0) }) {
+            return fallback
+        }
+        return KairosAgentNudge(
+            stage: fallback.stage,
+            title: copy.title.trimmingCharacters(in: .whitespacesAndNewlines),
+            subtitle: copy.subtitle.trimmingCharacters(in: .whitespacesAndNewlines),
+            body: copy.body.trimmingCharacters(in: .whitespacesAndNewlines),
+            microStep: copy.microStep.trimmingCharacters(in: .whitespacesAndNewlines),
+            microStepLabel: fallback.microStepLabel,
+            primaryActionTitle: copy.primary.trimmingCharacters(in: .whitespacesAndNewlines),
+            secondaryActionTitle: copy.secondary.trimmingCharacters(in: .whitespacesAndNewlines),
+            trialMinutes: fallback.trialMinutes,
+            source: .model
+        )
+    }
+
+    static func trialMinutes(for task: KairosTask, stage: NudgeStage) -> Int {
+        switch stage {
+        case .transition: return 0
+        case .start: return min(15, max(5, task.estimatedMinutes))
+        case .graceRescue: return min(5, max(2, task.estimatedMinutes))
+        }
+    }
+
+    private static func microStep(for task: KairosTask, stage: NudgeStage) -> String {
+        let title = task.title.lowercased()
+        let action: String
+        if title.contains("leetcode") || title.contains("题") || title.contains("刷") {
+            action = "打开题目，只看题面第一句"
+        } else if title.contains("读") || title.contains("阅读") || title.contains("read") {
+            action = "打开材料，只看第一段"
+        } else if title.contains("写") || title.contains("文档") || title.contains("论文") || title.contains("report") || title.contains("essay") {
+            action = "打开页面，敲下一行标题即可"
+        } else if title.contains("代码") || title.contains("code") || title.contains("开发") || title.contains("编程") || title.contains("debug") {
+            action = "打开编辑器，把光标放进去就行"
+        } else if title.contains("邮件") || title.contains("email") || title.contains("inbox") {
+            action = "打开收件箱，先点开一封"
+        } else if title.contains("会议") || title.contains("面试") || title.contains("interview") {
+            action = "打开会议页或笔记，写下今天只想确认的一件事"
+        } else {
+            action = "坐下，把相关页面打开即可"
+        }
+
+        switch stage {
+        case .transition:
+            return "把水杯放到手边，相关窗口先开着。还不用正式开始。"
+        case .start:
+            return action
+        case .graceRescue:
+            return "门槛再降一点：\(action)。做完这一下就可以停。"
+        }
+    }
+
+    private static func copyDeck(load: CognitiveLoad, stage: NudgeStage, trial: Int) -> (title: String, subtitle: String, body: String, label: String, primary: String, secondary: String) {
+        switch (stage, load) {
+        case (.transition, .high):
+            return (
+                "先不用开始",
+                "给大脑留 10 分钟预热",
+                "高认知任务需要一点缓冲。现在只是把环境摆好，不是要求你立刻进入状态。",
+                "预热动作",
+                "我先把东西摊开",
+                "现在还不需要动手"
+            )
+        case (.transition, .medium):
+            return (
+                "可以先靠近一点",
+                "到点前，先把入口打开",
+                "不用进入工作状态。把工具摊开，让下一步变得更容易看见。",
+                "预热动作",
+                "我先打开入口",
+                "现在还不需要动手"
+            )
+        case (.transition, .low):
+            return (
+                "轻松热个身就好",
+                "这件事很小，先把位置坐好",
+                "到点前只需要靠近它。坐下来、打开页面，都算准备完成。",
+                "预热动作",
+                "我先坐下来",
+                "现在还不需要动手"
+            )
+        case (.start, .high):
+            return (
+                "这件事看起来大，第一步很小",
+                "只需要坐下，把入口打开",
+                "高负荷任务容易让人卡住。我们不追求完成，只做一个毫不费力的动作。",
+                "破冰第一步",
+                "我已经坐好，开始 \(trial) 分钟试水",
+                "这次先路过，不算放弃"
+            )
+        case (.start, .medium):
+            return (
+                "不用做完，只要开始",
+                "打开页面，敲下一行标题即可",
+                "启动阻力通常来自把整件事一次想完。先做一个 10 秒内能完成的动作。",
+                "破冰第一步",
+                "我已经坐好，开始 \(trial) 分钟试水",
+                "这次先路过，不算放弃"
+            )
+        case (.start, .low):
+            return (
+                "轻轻迈一小步就行",
+                "打开软件，坐下来即可",
+                "这件事不需要一次做完。先坐下，把入口打开，就算开始了。",
+                "破冰第一步",
+                "我已经坐好，开始 \(trial) 分钟试水",
+                "这次先路过，不算放弃"
+            )
+        case (.graceRescue, .high):
+            return (
+                "卡壳不是失败，只是需要更小的入口",
+                "接纳现在的状态，做一次 \(trial) 分钟微专注",
+                "临近最晚开始也没关系。我们可以把任务降级成一个很小的动作，做完就能停。",
+                "降级一步",
+                "先试 \(trial) 分钟，随时可以停",
+                "先缓一缓，任务还在"
+            )
+        case (.graceRescue, .medium):
+            return (
+                "卡住很正常，先做 \(trial) 分钟",
+                "无压力降级，不需要追赶",
+                "顺延或卡住都不扣分。先用一次很短的微专注，重新碰到这件事。",
+                "降级一步",
+                "先试 \(trial) 分钟，随时可以停",
+                "先缓一缓，任务还在"
+            )
+        case (.graceRescue, .low):
+            return (
+                "没关系，我们把步子再缩小",
+                "5 分钟微专注就够了",
+                "现在开始仍然只需要一个很小的动作。做完可以停，任务会继续等你。",
+                "降级一步",
+                "先试 \(trial) 分钟，随时可以停",
+                "先缓一缓，任务还在"
+            )
+        }
     }
 }

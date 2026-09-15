@@ -95,4 +95,73 @@ final class KairosAdvisorTests: XCTestCase {
         let response = try JSONDecoder().decode(AgentChatResponseDTO.self, from: Data(json.utf8))
         XCTAssertNotNil(response.proposedActions.first?.deadline)
     }
+
+    func testLocalStartNudgeAvoidsAlarmLanguage() {
+        let task = KairosTask(title: "写项目文档", estimatedMinutes: 45, cognitiveLoad: .high)
+        let nudge = KairosAdvisor.generateLocalNudge(for: task, stage: .start)
+        let combined = [nudge.title, nudge.subtitle, nudge.body, nudge.microStep, nudge.primaryActionTitle, nudge.secondaryActionTitle].joined()
+        XCTAssertFalse(NudgeEngine.isJudgmental(combined))
+        XCTAssertTrue(nudge.primaryActionTitle.contains("试水"))
+        XCTAssertTrue(nudge.microStep.contains("标题") || nudge.microStep.contains("打开"))
+        XCTAssertEqual(nudge.source, .local)
+        XCTAssertEqual(nudge.trialMinutes, 15)
+    }
+
+    func testHighLoadTransitionIsWarmupNotStart() {
+        let task = KairosTask(title: "系统设计复习", estimatedMinutes: 90, cognitiveLoad: .high)
+        let nudge = KairosAdvisor.generateLocalNudge(for: task, stage: .transition)
+        XCTAssertEqual(nudge.title, "先不用开始")
+        XCTAssertTrue(nudge.microStep.contains("还不用正式开始"))
+        XCTAssertEqual(nudge.trialMinutes, 0)
+        XCTAssertEqual(nudge.microStepLabel, "预热动作")
+    }
+
+    func testGraceRescueOffersGuiltFreeDowngrade() {
+        let task = KairosTask(title: "刷 LeetCode", estimatedMinutes: 40, cognitiveLoad: .medium)
+        let nudge = KairosAdvisor.generateLocalNudge(for: task, stage: .graceRescue)
+        XCTAssertTrue(nudge.primaryActionTitle.contains("随时可以停"))
+        XCTAssertTrue(nudge.secondaryActionTitle.contains("任务还在"))
+        XCTAssertTrue(nudge.microStep.contains("打开题目"))
+        XCTAssertEqual(nudge.trialMinutes, 5)
+        XCTAssertFalse(NudgeEngine.isJudgmental(nudge.title + nudge.body))
+    }
+
+    func testCognitiveLoadChangesStartCopy() {
+        let high = KairosTask(title: "准备面试", estimatedMinutes: 60, cognitiveLoad: .high)
+        let low = KairosTask(title: "准备面试", estimatedMinutes: 60, cognitiveLoad: .low)
+        let highNudge = KairosAdvisor.generateLocalNudge(for: high, stage: .start)
+        let lowNudge = KairosAdvisor.generateLocalNudge(for: low, stage: .start)
+        XCTAssertNotEqual(highNudge.title, lowNudge.title)
+        XCTAssertTrue(highNudge.title.contains("第一步很小"))
+    }
+
+    func testPostponedTaskResolvesToGraceRescue() {
+        let task = KairosTask(title: "写周报", estimatedMinutes: 30)
+        task.dayOrder = 2
+        XCTAssertEqual(KairosAdvisor.resolveNudgeStage(for: task, latestSafeStart: nil), .graceRescue)
+    }
+
+    func testModelMergeFallsBackWhenCopyIsJudgmental() {
+        let task = KairosTask(title: "写周报", estimatedMinutes: 30)
+        let local = KairosAdvisor.generateLocalNudge(for: task, stage: .start)
+        let merged = NudgeEngine.merging(
+            model: ("到时间了", "必须开始", "该开始了", "立即开始认真做", "立即开始", "关闭"),
+            onto: local
+        )
+        XCTAssertEqual(merged, local)
+        XCTAssertEqual(merged.source, .local)
+    }
+
+    func testModelMergeKeepsEmpathicCopy() {
+        let task = KairosTask(title: "写周报", estimatedMinutes: 30)
+        let local = KairosAdvisor.generateLocalNudge(for: task, stage: .start)
+        let merged = NudgeEngine.merging(
+            model: ("先坐下就好", "打开文档敲个标题", "不需要一次写完", "打开页面，写下“周报”两个字", "我已经坐好，开始 15 分钟试水", "这次先路过，不算放弃"),
+            onto: local
+        )
+        XCTAssertEqual(merged.source, .model)
+        XCTAssertEqual(merged.title, "先坐下就好")
+        XCTAssertEqual(merged.microStep, "打开页面，写下“周报”两个字")
+        XCTAssertEqual(merged.stage, .start)
+    }
 }

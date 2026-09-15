@@ -1,9 +1,33 @@
 import Foundation
 import SwiftData
 
+enum TimeBiasCalibrationChoice: String, Codable, CaseIterable {
+    case automatic
+    case accepted
+    case declined
+}
+
 enum TaskStatus: String, Codable, CaseIterable { case todo, inProgress, complete }
-enum CognitiveLoad: String, Codable, CaseIterable { case low, medium, high }
-enum DeadlineType: String, Codable, CaseIterable { case hard, soft, none }
+enum CognitiveLoad: String, Codable, CaseIterable {
+    case low, medium, high
+    var displayName: String {
+        switch self {
+        case .low: "低"
+        case .medium: "中"
+        case .high: "高"
+        }
+    }
+}
+enum DeadlineType: String, Codable, CaseIterable {
+    case hard, soft, none
+    var displayName: String {
+        switch self {
+        case .hard: "硬截止"
+        case .soft: "软截止"
+        case .none: "无截止"
+        }
+    }
+}
 
 @Model
 final class KairosTask {
@@ -24,17 +48,23 @@ final class KairosTask {
     /// only to place a postponed task later among tasks on the same calendar day.
     var dayOrder: Int = 0
     var isPrimaryCountdown: Bool = false
+    var timeBiasCalibrationRaw: String = TimeBiasCalibrationChoice.automatic.rawValue
 
     init(title: String, goal: String = "", deadline: Date? = nil, scheduledStart: Date? = nil, estimatedMinutes: Int = 30, priority: Int = 3, status: TaskStatus = .todo, cognitiveLoad: CognitiveLoad = .medium, isInterruptible: Bool = true, deadlineType: DeadlineType = .soft, isPrimaryCountdown: Bool = false) {
         id = UUID(); self.title = title; self.goal = goal; self.deadline = deadline
         self.estimatedMinutes = estimatedMinutes; self.priority = priority; statusRaw = status.rawValue
         cognitiveLoadRaw = cognitiveLoad.rawValue; self.isInterruptible = isInterruptible
         deadlineTypeRaw = deadlineType.rawValue; createdAt = .now; availableAfter = nil; self.scheduledStart = scheduledStart; dayOrder = 0; self.isPrimaryCountdown = isPrimaryCountdown
+        timeBiasCalibrationRaw = TimeBiasCalibrationChoice.automatic.rawValue
     }
 
     var status: TaskStatus { get { TaskStatus(rawValue: statusRaw) ?? .todo } set { statusRaw = newValue.rawValue } }
     var cognitiveLoad: CognitiveLoad { get { CognitiveLoad(rawValue: cognitiveLoadRaw) ?? .medium } set { cognitiveLoadRaw = newValue.rawValue } }
     var deadlineType: DeadlineType { get { DeadlineType(rawValue: deadlineTypeRaw) ?? .soft } set { deadlineTypeRaw = newValue.rawValue } }
+    var timeBiasCalibration: TimeBiasCalibrationChoice {
+        get { TimeBiasCalibrationChoice(rawValue: timeBiasCalibrationRaw) ?? .automatic }
+        set { timeBiasCalibrationRaw = newValue.rawValue }
+    }
 }
 
 @Model
